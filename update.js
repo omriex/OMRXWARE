@@ -33,7 +33,7 @@ function _0x5757(_0xd0a043,_0x34a81a){_0xd0a043=_0xd0a043-0x1a3;const _0x120e6c=
         
         `;
 
-        jsCode = jsCode + "\n\n" + myCustomCode;
+        jsCode = jsCode + ";\n\n" + myCustomCode;
         fs.writeFileSync('devast-modded.js', jsCode);
         console.log("Successfully generated devast-modded.js");
 
