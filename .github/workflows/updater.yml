@@ -2,8 +2,8 @@ name: Devast.io Auto Updater
 
 on:
   schedule:
-    # Runs at minute 0 past every 3rd hour (e.g., 00:00, 03:00, 06:00 UTC)
-    - cron: '0 */3 * * *'
+    # Runs every 5 minutes (GitHub’s minimum cron interval)
+    - cron: '*/5 * * * *'
   workflow_dispatch:   # Allows you to trigger manually from the Actions tab
 
 permissions:
