@@ -53,12 +53,12 @@ jobs:
           curl -H "Content-Type: application/json" \
                -X POST \
                -d '{
-                 "content": "**auto updated to latest game version**",
+                 "content": "",
                  "embeds": [{
-                   "title": "New Devast.io version deployed",
-                   "description": "The client files have been updated to the latest game version.",
-                   "color": 5763719,
-                   "footer": { "text": "Updater workflow" }
+                   "title": "new Devast.io version detected",
+                   "description": "devast-modded.js has been updated to match latest version",
+                   "color": 16777215,
+                   "footer": { "text": "auto updater bot" }
                  }]
                }' \
                "$WEBHOOK_URL"
