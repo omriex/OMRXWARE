@@ -53,7 +53,7 @@ jobs:
           curl -H "Content-Type: application/json" \
                -X POST \
                -d '{
-                 "content": "**auto-updated **",
+                 "content": "**auto updated to latest game version**",
                  "embeds": [{
                    "title": "New Devast.io version deployed",
                    "description": "The client files have been updated to the latest game version.",
