@@ -15,23 +15,18 @@ async function runUpdater() {
         const jsResponse = await fetch(jsUrl);
         let jsCode = await jsResponse.text();
 
-        // Save original
         fs.writeFileSync('devast-original.js', jsCode);
 
-        // Apply modifications
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
 
-        // Read your custom obfuscated code from a local file safely
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
             
-            // IMPORTANT: The leading semicolon (;) prevents the game's code from crashing into yours
             jsCode = jsCode + '\n\n;\n' + myCustomScript;
         } catch (err) {
             console.error("Could not find omrxware.js. Did you create it?");
         }
 
-        // Save modded (This creates exactly ONE final file)
         fs.writeFileSync('devast-modded.js', jsCode);
         console.log("Successfully generated devast-modded.js");
 
