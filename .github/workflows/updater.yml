@@ -1,0 +1,39 @@
+# .github/workflows/updater.yml
+name: Devast.io Auto Updater
+
+on:
+  schedule:
+    # Runs at minute 0 past every 3rd hour (e.g., 00:00, 03:00, 06:00 UTC)
+    - cron: '0 */3 * * *'
+  workflow_dispatch: # Allows you to trigger the script manually from the Actions tab
+
+permissions:
+  contents: write # Allows the bot to push commits to your repo
+
+jobs:
+  check-and-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Node 20 includes native fetch()
+
+      - name: Run Updater Script
+        run: node update.js
+
+      - name: Commit and Push Changes
+        run: |
+          # Configure Git as a bot
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add the generated files
+          git add devast-original.js devast-modded.js
+          
+          # Check if there are actually changes. If there are, commit and push.
+          # If the JS hasn't changed, this safely does nothing.
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update: New Devast.io client version detected" && git push)
