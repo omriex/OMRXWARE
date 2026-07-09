@@ -22,9 +22,25 @@ async function runUpdater() {
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
             
-            jsCode = jsCode + '\n\n;\n' + myCustomScript;
+            const base64Script = Buffer.from(myCustomScript).toString('base64');
+            
+            const injectionCode = `
+// Delay injection by 1 second to let the game fully load its UI and Keybinds
+setTimeout(function() {
+    try {
+        var script = document.createElement('script');
+        // Safely decode the Base64 script and place it in the tag
+        script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
+        document.body.appendChild(script);
+        console.log("Custom script successfully injected via Base64!");
+    } catch (e) {
+        console.error("Injection error:", e);
+    }
+}, 1000); 
+`;
+            jsCode = jsCode + '\n\n;\n' + injectionCode;
         } catch (err) {
-            console.error("Could not find omrxware.js. Did you create it?");
+            console.error("Could not find omrxware.js.");
         }
 
         fs.writeFileSync('devast-modded.js', jsCode);
