@@ -17,28 +17,24 @@ async function runUpdater() {
 
         fs.writeFileSync('devast-original.js', jsCode);
 
-        // Zoom patch (unchanged)
+        // --- 1. ZOOM PATCH (works fine) ---
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
 
+        // --- 2. ANTICHEAT PATCH (direct regex replacement) ---
+        // This replaces the WebSocket native‑code check with a simple assignment.
+        jsCode = jsCode.replace(
+            /if\s*\(\s*webSocketInstance\s*===\s*undefined\s*\)\s*\{\s*try\s*\{\s*if\s*\(\s*typeof\s*window\.WebSocket\s*!==\s*"function"\s*\|\|\s*indexOf\s*\(\s*Function\.prototype\.toString\.call\s*\(\s*window\.WebSocket\s*\)\s*,\s*"\[native\s*code\]"\s*\)\s*===\s*-1\s*\)\s*\{\s*webSocketInstance\s*=\s*null;\s*\}\s*else\s*\{\s*webSocketInstance\s*=\s*new\s*window\.WebSocket\s*\(\s*"wss:\/\/127\.0\.0\.1:1"\s*\);\s*\}\s*\}\s*catch\s*\(\s*err\s*\)\s*\{\s*webSocketInstance\s*=\s*null;\s*\}\s*\}/,
+            'if (webSocketInstance === undefined) { webSocketInstance = new window.WebSocket("wss://127.0.0.1:1"); }'
+        );
+
+        // --- 3. ORIGINAL BOOTLOADER (unchanged) ---
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
             const base64Script = Buffer.from(myCustomScript).toString('base64');
 
-            // --- REVERTED BOOTLOADER WITH ANTICHEAT PATCH ---
             const injectionCode = `
-// --- OMRXWARE BOOTLOADER & UI REMOVER (WITH PATCH) ---
+// --- OMRXWARE BOOTLOADER & UI REMOVER ---
 (function() {
-    // =====================================================
-    // ANTICHEAT PATCH: Make WebSocket appear native
-    // =====================================================
-    const origToString = Function.prototype.toString;
-    Function.prototype.toString = function() {
-        if (this === window.WebSocket) {
-            return "function WebSocket() { [native code] }";
-        }
-        return origToString.apply(this, arguments);
-    };
-
     // 1. SAFE Anti-Crash DOM Proxy
     var targets = [
         'terms', 'howtoplay', 'changelog', 'featuredVideo', 
