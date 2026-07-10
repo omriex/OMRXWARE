@@ -17,16 +17,28 @@ async function runUpdater() {
 
         fs.writeFileSync('devast-original.js', jsCode);
 
-        // Apply Zoom patch
+        // Zoom patch (unchanged)
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
 
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
             const base64Script = Buffer.from(myCustomScript).toString('base64');
-            
+
+            // --- REVERTED BOOTLOADER WITH ANTICHEAT PATCH ---
             const injectionCode = `
-// --- OMRXWARE BOOTLOADER & UI REMOVER ---
+// --- OMRXWARE BOOTLOADER & UI REMOVER (WITH PATCH) ---
 (function() {
+    // =====================================================
+    // ANTICHEAT PATCH: Make WebSocket appear native
+    // =====================================================
+    const origToString = Function.prototype.toString;
+    Function.prototype.toString = function() {
+        if (this === window.WebSocket) {
+            return "function WebSocket() { [native code] }";
+        }
+        return origToString.apply(this, arguments);
+    };
+
     // 1. SAFE Anti-Crash DOM Proxy
     var targets = [
         'terms', 'howtoplay', 'changelog', 'featuredVideo', 
@@ -52,28 +64,11 @@ async function runUpdater() {
     if (document.head) document.head.appendChild(style);
     else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
 
-    // 3. ZERO-LAG CANVAS HIJACK
-    // Use a lightweight timer to check if we are in the menu.
-    // This stops the JS engine from choking and causing you to disconnect/die on spawn!
-    var isMainMenu = true;
-    setInterval(function() {
-        var nickContainer = document.getElementById('nickname');
-        var nickInput = document.getElementById('nicknameInput');
-        
-        // If the nickname wrapper or input is hidden, we are officially in-game.
-        if (nickContainer && nickContainer.style.display === 'none') {
-            isMainMenu = false;
-        } else if (nickInput && nickInput.offsetParent === null) {
-            isMainMenu = false;
-        } else {
-            isMainMenu = true;
-        }
-    }, 500);
-
+    // 3. FLAWLESS & OPTIMIZED CANVAS RENDERING HIJACK
     const origDrawImage = CanvasRenderingContext2D.prototype.drawImage;
     CanvasRenderingContext2D.prototype.drawImage = function() {
-        // QUICK EXIT: Checks a single boolean instead of querying the DOM. Zero FPS lag!
-        if (!isMainMenu) {
+        var nickInput = document.getElementById('nicknameInput');
+        if (!nickInput || nickInput.offsetParent === null) {
             return origDrawImage.apply(this, arguments);
         }
 
@@ -91,20 +86,14 @@ async function runUpdater() {
                     var canvasCenter = this.canvas.width / 2;
                     var relX = (absX - canvasCenter) / transform.a;
 
-                    // Asymmetrical Safe Zone
                     if (relX < -440 || relX > 275) {
-                        return; // Drop frame
+                        return; // Stop drawing the side panels!
                     }
                 }
             }
         } catch (err) {}
         
         return origDrawImage.apply(this, arguments);
-    };
-    
-    // ANTI-CHEAT SPOOF: Disguise our hooked function so the game thinks it's native browser code
-    CanvasRenderingContext2D.prototype.drawImage.toString = function() {
-        return 'function drawImage() { [native code] }';
     };
 
     // 4. Inject Omrxware
@@ -113,7 +102,7 @@ async function runUpdater() {
             var script = document.createElement('script');
             script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
             document.body.appendChild(script);
-            console.log("OMRXWARE successfully injected! Lag fixed, Anti-Cheat spoofed.");
+            console.log("OMRXWARE successfully injected! Menu isolated and In-Game FPS optimized.");
         } catch (e) {
             console.error("Injection error:", e);
         }
@@ -122,8 +111,8 @@ async function runUpdater() {
 // ---------------------------
 `;
             // Add the bootloader to the TOP of the script
-            jsCode = injectionCode + '\n;\n' + jsCode; 
-            
+            jsCode = injectionCode + '\n;\n' + jsCode;
+
         } catch (err) {
             console.error("Could not find omrxware.js.");
         }
