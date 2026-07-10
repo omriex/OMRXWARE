@@ -17,39 +17,32 @@ async function runUpdater() {
 
         fs.writeFileSync('devast-original.js', jsCode);
 
-        // --- 1. Zoom patch (proven safe) ---
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
 
-        // --- 2. Inject omrxware.js (no overrides, no UI hiding) ---
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
+            
             const base64Script = Buffer.from(myCustomScript).toString('base64');
-
+            
             const injectionCode = `
-// --- OMRXWARE INJECTOR (NO UI MODIFICATIONS) ---
-(function() {
-    setTimeout(function() {
-        try {
-            var script = document.createElement('script');
-            script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
-            document.body.appendChild(script);
-            console.log("OMRXWARE injected successfully.");
-        } catch (e) {
-            console.error("Injection error:", e);
-        }
-    }, 1000);
-})();
-// ---------------------------
+setTimeout(function() {
+    try {
+        var script = document.createElement('script');
+        script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
+        document.body.appendChild(script);
+        console.log("OMRXWARE successfully injected!");
+    } catch (e) {
+        console.error("Injection error:", e);
+    }
+}, 1000); 
 `;
-            // Prepend the injection to the game code
-            jsCode = injectionCode + '\n;\n' + jsCode;
-
+            jsCode = jsCode + '\n\n;\n' + injectionCode;
         } catch (err) {
             console.error("Could not find omrxware.js.");
         }
 
         fs.writeFileSync('devast-modded.js', jsCode);
-        console.log("✅ Successfully generated devast-modded.js (zoom + injection only)");
+        console.log("Successfully generated devast-modded.js");
 
     } catch (error) {
         console.error(error);
