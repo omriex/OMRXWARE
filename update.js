@@ -25,8 +25,10 @@ async function runUpdater() {
             const base64Script = Buffer.from(myCustomScript).toString('base64');
             
             const injectionCode = `
-// --- OMRXWARE BOOTLOADER & UI REMOVER ---
+// --- OMRXWARE BOOTLOADER & UI REMOVER (NO CANVAS HOOK) ---
 (function() {
+    console.log("[OMRXWARE] Bootloader starting (UI only – no canvas hooks)");
+
     // 1. SAFE Anti-Crash DOM Proxy
     var targets = [
         'terms', 'howtoplay', 'changelog', 'featuredVideo', 
@@ -52,53 +54,13 @@ async function runUpdater() {
     if (document.head) document.head.appendChild(style);
     else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
 
-    // 3. FLAWLESS & OPTIMIZED CANVAS RENDERING HIJACK
-    const origDrawImage = CanvasRenderingContext2D.prototype.drawImage;
-    CanvasRenderingContext2D.prototype.drawImage = function() {
-        // QUICK EXIT: Check if the nickname input is visible.
-        // If we are spawned in-game, skip all math and draw normally to save FPS!
-        var nickInput = document.getElementById('nicknameInput');
-        if (!nickInput || nickInput.offsetParent === null) {
-            return origDrawImage.apply(this, arguments);
-        }
-
-        try {
-            var dx = undefined;
-            
-            // Fetch the X coordinate
-            if (arguments.length === 3 || arguments.length === 5) dx = arguments[1];
-            else if (arguments.length === 9) dx = arguments[5];
-
-            if (dx !== undefined) {
-                var transform = this.getTransform();
-                var isUI = Math.abs(transform.a - 1) < 0.05 || Math.abs(transform.a - window.devicePixelRatio) < 0.05;
-
-                if (isUI) {
-                    var absX = dx * transform.a + transform.e;
-                    var canvasCenter = this.canvas.width / 2;
-                    
-                    var relX = (absX - canvasCenter) / transform.a;
-
-                    // Asymmetrical Safe Zone (User adjusted to 275)
-                    // Extends left to -440px
-                    // Extends right to +275px 
-                    if (relX < -440 || relX > 275) {
-                        return; // Stop drawing the side panels!
-                    }
-                }
-            }
-        } catch (err) {}
-        
-        return origDrawImage.apply(this, arguments);
-    };
-
-    // 4. Inject Omrxware
+    // 3. Inject Omrxware
     setTimeout(function() {
         try {
             var script = document.createElement('script');
             script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
             document.body.appendChild(script);
-            console.log("OMRXWARE successfully injected! Menu isolated and In-Game FPS optimized.");
+            console.log("OMRXWARE successfully injected! UI hidden, no canvas hooks.");
         } catch (e) {
             console.error("Injection error:", e);
         }
