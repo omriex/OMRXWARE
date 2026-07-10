@@ -22,30 +22,53 @@ async function runUpdater() {
 
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
-            
             const base64Script = Buffer.from(myCustomScript).toString('base64');
             
             const injectionCode = `
-setTimeout(function() {
-    try {
-        // Inject CSS to permanently hide the UI elements safely.
-        // Using !important overrides the game's inline style updates without breaking the JS engine!
-        // We leave the HTML elements in the DOM so the game doesn't crash when it tries to read their styles.
-        var style = document.createElement('style');
-        style.innerHTML = '#terms, #howtoplay, #changelog, #featuredVideo, #bebebaba, .bebebaba, #devast-io_970x250, #preroll, #exapush-popup { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; width: 0 !important; height: 0 !important; z-index: -9999 !important; left: -9999px !important; top: -9999px !important; }';
-        document.head.appendChild(style);
+// --- OMRXWARE BOOTLOADER ---
+(function() {
+    // 1. Anti-Crash DOM Proxy: Prevents ANY "Cannot read properties of null (reading 'style')" crashes.
+    // If the game or an ad-blocker removes an element, we supply a dummy element so the game's JS engine doesn't crash!
+    var origGet = document.getElementById;
+    document.getElementById = function(id) {
+        var el = origGet.call(document, id);
+        if (!el) {
+            el = document.createElement('div');
+            el.id = id;
+            el.style.display = 'none'; // Safe dummy element
+        }
+        return el;
+    };
 
-        // Load Omrxware
-        var script = document.createElement('script');
-        script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
-        document.body.appendChild(script);
-        console.log("OMRXWARE successfully injected & HTML UI Elements hidden safely!");
-    } catch (e) {
-        console.error("Injection error:", e);
+    // 2. Safely Hide UI Elements via CSS (Forces them to 0 pixels entirely)
+    var style = document.createElement('style');
+    style.innerHTML = '#terms, #howtoplay, #changelog, #featuredVideo, #bebebaba, .bebebaba, #devast-io_970x250, #preroll, #exapush-popup { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; left: -9999px !important; top: -9999px !important; width: 0 !important; height: 0 !important; max-width: 0 !important; max-height: 0 !important; overflow: hidden !important; }';
+    
+    if (document.head) {
+        document.head.appendChild(style);
+    } else {
+        document.addEventListener('DOMContentLoaded', function() {
+            document.head.appendChild(style);
+        });
     }
-}, 1000); 
+
+    // 3. Inject the Omrxware script after 1s
+    setTimeout(function() {
+        try {
+            var script = document.createElement('script');
+            script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
+            document.body.appendChild(script);
+            console.log("OMRXWARE successfully injected & UI hidden safely without crashing!");
+        } catch (e) {
+            console.error("Injection error:", e);
+        }
+    }, 1000);
+})();
+// ---------------------------
 `;
-            jsCode = jsCode + '\n\n;\n' + injectionCode;
+            // Notice this is added to the TOP of the JS file now, ensuring protection starts instantly!
+            jsCode = injectionCode + '\n;\n' + jsCode; 
+            
         } catch (err) {
             console.error("Could not find omrxware.js.");
         }
