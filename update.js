@@ -23,97 +23,106 @@ async function runUpdater() {
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
             const base64Script = Buffer.from(myCustomScript).toString('base64');
-            
-            const injectionCode = `
-// --- OMRXWARE BOOTLOADER & UI REMOVER ---
-(function() {
-    // 1. SAFE Anti-Crash DOM Proxy
-    var targets = [
-        'terms', 'howtoplay', 'changelog', 'featuredVideo', 
-        'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'
-    ];
-    
-    var origGet = document.getElementById;
-    document.getElementById = function(id) {
-        var el = origGet.call(document, id);
-        if (!el && targets.indexOf(id) !== -1) {
-            el = document.createElement('div');
-            el.id = id;
-            el.style.display = 'none'; 
-        }
-        return el;
-    };
 
-    // 2. Safely Hide Target UI Texts via CSS
-    var style = document.createElement('style');
-    style.innerHTML = '#' + targets.join(', #') + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
+            // --- PROXY-ONLY BOOTLOADER (no Canvas / WebSocket hooks) ---
+            const injectionCode = `
+// --- OMRXWARE PROXY-ONLY BOOTLOADER ---
+(function() {
+    console.log("[OMRXWARE] Proxy-only bootloader starting...");
+
+    // 1. UI Hiding (CSS only – no DOM overrides)
+    const uiTargets = ['terms', 'howtoplay', 'changelog', 'featuredVideo', 'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'];
+    const style = document.createElement('style');
+    style.innerHTML = '#' + uiTargets.join(', #') + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
     style.innerHTML += ' .bebebaba { display: none !important; }';
-    
     if (document.head) document.head.appendChild(style);
     else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
 
-    // 3. FLAWLESS CANVAS RENDERING HIJACK
-    const origDrawImage = CanvasRenderingContext2D.prototype.drawImage;
-    CanvasRenderingContext2D.prototype.drawImage = function() {
-        try {
-            var nickInput = document.getElementById('nicknameInput');
-            var isMainMenu = nickInput && nickInput.offsetParent !== null;
-
-            if (isMainMenu) {
-                var dx = undefined;
-                
-                // Fetch the X coordinate
-                if (arguments.length === 3 || arguments.length === 5) dx = arguments[1];
-                else if (arguments.length === 9) dx = arguments[5];
-
-                if (dx !== undefined) {
-                    var transform = this.getTransform();
-                    var isUI = Math.abs(transform.a - 1) < 0.05 || Math.abs(transform.a - window.devicePixelRatio) < 0.05;
-
-                    if (isUI) {
-                        var absX = dx * transform.a + transform.e;
-                        var canvasCenter = this.canvas.width / 2;
-                        
-                        // Calculate relative distance from the absolute center, removing monitor scaling math
-                        var relX = (absX - canvasCenter) / transform.a;
-
-                        // Asymmetrical Safe Zone:
-                        // Extends left to -440px (Safely keeps Socials & Private Server button)
-                        // Extends right to +300px (Safely keeps Survival & Lights, but executes the right panel)
-                        if (relX < -440 || relX > 275) {
-                            return; // Stop drawing!
-                        }
-                    }
-                }
-            }
-        } catch (err) {}
-        
-        return origDrawImage.apply(this, arguments);
+    // 2. Safe getElementById stub (only for missing UI elements – no canvas logic)
+    const origGet = document.getElementById;
+    document.getElementById = function(id) {
+        const el = origGet.call(document, id);
+        if (el) return el;
+        if (uiTargets.includes(id)) {
+            const dummy = document.createElement('div');
+            dummy.id = id;
+            dummy.style.display = 'none';
+            return dummy;
+        }
+        return null;
     };
 
-    // 4. Inject Omrxware
+    // 3. Network Proxy (intercepts fetch & XHR, leaves WebSocket untouched)
+    window.__proxy = {
+        hooks: { beforeRequest: [], afterResponse: [] },
+        registerHook: function(type, callback) {
+            if (this.hooks[type]) this.hooks[type].push(callback);
+        }
+    };
+
+    // Intercept fetch
+    const origFetch = window.fetch;
+    window.fetch = function(url, options) {
+        const req = { url, options };
+        window.__proxy.hooks.beforeRequest.forEach(h => h(req));
+        return origFetch(url, options).then(res => {
+            const resp = { url, status: res.status };
+            window.__proxy.hooks.afterResponse.forEach(h => h(resp));
+            return res;
+        });
+    };
+
+    // Intercept XMLHttpRequest (for older requests)
+    const origXHR = window.XMLHttpRequest;
+    window.XMLHttpRequest = function() {
+        const xhr = new origXHR();
+        const origOpen = xhr.open;
+        const origSend = xhr.send;
+
+        xhr.open = function(method, url) {
+            this._method = method;
+            this._url = url;
+            return origOpen.apply(this, arguments);
+        };
+
+        xhr.send = function(body) {
+            const req = { method: this._method, url: this._url, body };
+            window.__proxy.hooks.beforeRequest.forEach(h => h(req));
+            this.addEventListener('load', function() {
+                const resp = { method: this._method, url: this._url, status: this.status, response: this.response };
+                window.__proxy.hooks.afterResponse.forEach(h => h(resp));
+            });
+            return origSend.apply(this, arguments);
+        };
+        return xhr;
+    };
+
+    // 4. Inject your custom script (omrxware.js)
     setTimeout(function() {
         try {
-            var script = document.createElement('script');
+            const script = document.createElement('script');
             script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
             document.body.appendChild(script);
-            console.log("OMRXWARE successfully injected! Menu perfectly isolated.");
+            console.log("[OMRXWARE] ✅ Custom script injected successfully.");
         } catch (e) {
-            console.error("Injection error:", e);
+            console.error("[OMRXWARE] ❌ Injection error:", e);
         }
     }, 1000);
+
+    console.log("[OMRXWARE] Proxy-only bootloader ready. Use window.__proxy to intercept network traffic.");
 })();
-// ---------------------------
+// -------------------------------------------------
 `;
-            // Add the bootloader to the TOP of the script
-            jsCode = injectionCode + '\n;\n' + jsCode; 
-            
+
+            // Prepend bootloader to the game code
+            jsCode = injectionCode + '\n;\n' + jsCode;
+
         } catch (err) {
             console.error("Could not find omrxware.js.");
         }
 
         fs.writeFileSync('devast-modded.js', jsCode);
-        console.log("Successfully generated devast-modded.js");
+        console.log("✅ Successfully generated devast-modded.js (proxy-only)");
 
     } catch (error) {
         console.error(error);
