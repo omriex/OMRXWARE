@@ -24,21 +24,44 @@ async function runUpdater() {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
             const base64Script = Buffer.from(myCustomScript).toString('base64');
 
-            // --- PROXY-ONLY BOOTLOADER (no Canvas / WebSocket hooks) ---
+            // --- ENHANCED UI HIDING + PROXY-ONLY BOOTLOADER ---
             const injectionCode = `
-// --- OMRXWARE PROXY-ONLY BOOTLOADER ---
+// --- OMRXWARE BOOTLOADER (UI Hiding + Proxy Only, No Canvas/WebSocket) ---
 (function() {
-    console.log("[OMRXWARE] Proxy-only bootloader starting...");
+    console.log("[OMRXWARE] Bootloader starting (UI hiding + proxy-only)");
 
-    // 1. UI Hiding (CSS only – no DOM overrides)
-    const uiTargets = ['terms', 'howtoplay', 'changelog', 'featuredVideo', 'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'];
+    // ========== 1. AGGRESSIVE UI HIDING ==========
+    // Target IDs (known from game)
+    const uiTargets = [
+        'terms', 'howtoplay', 'changelog', 'featuredVideo',
+        'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'
+    ];
+
+    // Additional classes that often appear on popups/overlays
+    const uiClasses = [
+        'popup', 'modal', 'overlay', 'panel', 'dialog',
+        'ui-panel', 'game-overlay', 'menu-panel', 'popup-container'
+    ];
+
+    // Build CSS rules
+    let cssRules = '';
+    uiTargets.forEach(id => {
+        cssRules += '#' + id + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
+    });
+    uiClasses.forEach(cls => {
+        cssRules += '.' + cls + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
+    });
+    // Also hide any element with "popup" or "modal" in its ID (catch-all)
+    cssRules += '[id*="popup"] { display: none !important; }';
+    cssRules += '[id*="modal"] { display: none !important; }';
+    cssRules += '[id*="overlay"] { display: none !important; }';
+
     const style = document.createElement('style');
-    style.innerHTML = '#' + uiTargets.join(', #') + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
-    style.innerHTML += ' .bebebaba { display: none !important; }';
+    style.innerHTML = cssRules;
     if (document.head) document.head.appendChild(style);
     else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
 
-    // 2. Safe getElementById stub (only for missing UI elements – no canvas logic)
+    // Safe getElementById stub – returns dummy for known IDs
     const origGet = document.getElementById;
     document.getElementById = function(id) {
         const el = origGet.call(document, id);
@@ -52,7 +75,42 @@ async function runUpdater() {
         return null;
     };
 
-    // 3. Network Proxy (intercepts fetch & XHR, leaves WebSocket untouched)
+    // MutationObserver – hide any newly added elements that match our selectors
+    const observer = new MutationObserver(function(mutations) {
+        mutations.forEach(mutation => {
+            mutation.addedNodes.forEach(node => {
+                if (node.nodeType === 1) { // element node
+                    // Check if the node itself matches any target
+                    const id = node.id;
+                    const classList = node.classList;
+                    let shouldHide = false;
+                    if (id && uiTargets.includes(id)) shouldHide = true;
+                    if (!shouldHide) {
+                        for (let cls of uiClasses) {
+                            if (classList.contains(cls)) { shouldHide = true; break; }
+                        }
+                    }
+                    if (!shouldHide) {
+                        // Check if ID contains popup/modal/overlay
+                        if (id && (id.includes('popup') || id.includes('modal') || id.includes('overlay'))) {
+                            shouldHide = true;
+                        }
+                    }
+                    if (shouldHide) {
+                        node.style.display = 'none';
+                        node.style.opacity = '0';
+                        node.style.visibility = 'hidden';
+                        node.style.pointerEvents = 'none';
+                        node.style.zIndex = '-9999';
+                        console.log('[OMRXWARE] Hidden UI element:', node);
+                    }
+                }
+            });
+        });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    // ========== 2. NETWORK PROXY (fetch + XHR, NO WebSocket) ==========
     window.__proxy = {
         hooks: { beforeRequest: [], afterResponse: [] },
         registerHook: function(type, callback) {
@@ -72,7 +130,7 @@ async function runUpdater() {
         });
     };
 
-    // Intercept XMLHttpRequest (for older requests)
+    // Intercept XMLHttpRequest
     const origXHR = window.XMLHttpRequest;
     window.XMLHttpRequest = function() {
         const xhr = new origXHR();
@@ -97,7 +155,7 @@ async function runUpdater() {
         return xhr;
     };
 
-    // 4. Inject your custom script (omrxware.js)
+    // ========== 3. INJECT OMRXWARE SCRIPT ==========
     setTimeout(function() {
         try {
             const script = document.createElement('script');
@@ -109,9 +167,9 @@ async function runUpdater() {
         }
     }, 1000);
 
-    console.log("[OMRXWARE] Proxy-only bootloader ready. Use window.__proxy to intercept network traffic.");
+    console.log("[OMRXWARE] Bootloader ready. UI hidden, proxy active.");
 })();
-// -------------------------------------------------
+// ---------------------------
 `;
 
             // Prepend bootloader to the game code
@@ -122,7 +180,7 @@ async function runUpdater() {
         }
 
         fs.writeFileSync('devast-modded.js', jsCode);
-        console.log("✅ Successfully generated devast-modded.js (proxy-only)");
+        console.log("✅ Successfully generated devast-modded.js (with UI hiding + proxy-only)");
 
     } catch (error) {
         console.error(error);
