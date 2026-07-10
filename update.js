@@ -27,7 +27,7 @@ async function runUpdater() {
             const injectionCode = `
 // --- OMRXWARE BOOTLOADER & UI REMOVER ---
 (function() {
-    // 1. SAFE Anti-Crash DOM Proxy (Prevents missing HTML element crashes)
+    // 1. SAFE Anti-Crash DOM Proxy
     var targets = [
         'terms', 'howtoplay', 'changelog', 'featuredVideo', 
         'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'
@@ -52,61 +52,52 @@ async function runUpdater() {
     if (document.head) document.head.appendChild(style);
     else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
 
-    // 3. PERFECTED CANVAS RENDERING HIJACK (Removes Grey Panels, Keeps Logo & Locks)
+    // 3. FLAWLESS CANVAS RENDERING HIJACK
     const origDrawImage = CanvasRenderingContext2D.prototype.drawImage;
     CanvasRenderingContext2D.prototype.drawImage = function() {
         try {
-            // Only hide panels when we are on the Main Menu
             var nickInput = document.getElementById('nicknameInput');
             var isMainMenu = nickInput && nickInput.offsetParent !== null;
 
             if (isMainMenu) {
                 var dx = undefined;
                 
-                // Get the X coordinate based on how many arguments the game engine passed
-                if (arguments.length === 3 || arguments.length === 5) {
-                    dx = arguments[1];
-                } else if (arguments.length === 9) {
-                    dx = arguments[5];
-                }
+                // Fetch the X coordinate
+                if (arguments.length === 3 || arguments.length === 5) dx = arguments[1];
+                else if (arguments.length === 9) dx = arguments[5];
 
                 if (dx !== undefined) {
                     var transform = this.getTransform();
-                    
-                    // Calculate the ABSOLUTE X coordinate on your monitor
-                    var absX = dx * transform.a + transform.e;
-                    var canvasCenter = this.canvas.width / 2;
-                    
-                    // Identify UI elements (They are drawn at scale 1.0, game world is scaled by zoom)
                     var isUI = Math.abs(transform.a - 1) < 0.05 || Math.abs(transform.a - window.devicePixelRatio) < 0.05;
 
                     if (isUI) {
-                        // The entire center block (Logo, private server, ghoul mode) is ~800px wide.
-                        // Safe zone is 450 pixels to the left and right of the exact center.
-                        var safeRadius = 450; 
+                        var absX = dx * transform.a + transform.e;
+                        var canvasCenter = this.canvas.width / 2;
+                        
+                        // Calculate relative distance from the absolute center, removing monitor scaling math
+                        var relX = (absX - canvasCenter) / transform.a;
 
-                        // If the element is drawn on the far-left or far-right edge, delete it!
-                        if (absX < canvasCenter - safeRadius || absX > canvasCenter + safeRadius) {
-                            return; // Do not draw this frame!
+                        // Asymmetrical Safe Zone:
+                        // Extends left to -440px (Safely keeps Socials & Private Server button)
+                        // Extends right to +300px (Safely keeps Survival & Lights, but executes the right panel)
+                        if (relX < -440 || relX > 300) {
+                            return; // Stop drawing!
                         }
                     }
                 }
             }
-        } catch (err) {
-            // Failsafe: Ensures the game engine never crashes
-        }
+        } catch (err) {}
         
-        // Let the game draw everything inside the safe zone normally (Logo, Locks, Background)
         return origDrawImage.apply(this, arguments);
     };
 
-    // 4. Inject the Omrxware script
+    // 4. Inject Omrxware
     setTimeout(function() {
         try {
             var script = document.createElement('script');
             script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
             document.body.appendChild(script);
-            console.log("OMRXWARE successfully injected! Perfect UI Cleanup applied.");
+            console.log("OMRXWARE successfully injected! Menu perfectly isolated.");
         } catch (e) {
             console.error("Injection error:", e);
         }
