@@ -1,17 +1,6 @@
 
-// --- OMRXWARE BOOTLOADER & UI REMOVER (WITH PATCH) ---
+// --- OMRXWARE BOOTLOADER & UI REMOVER ---
 (function() {
-    // =====================================================
-    // ANTICHEAT PATCH: Make WebSocket appear native
-    // =====================================================
-    const origToString = Function.prototype.toString;
-    Function.prototype.toString = function() {
-        if (this === window.WebSocket) {
-            return "function WebSocket() { [native code] }";
-        }
-        return origToString.apply(this, arguments);
-    };
-
     // 1. SAFE Anti-Crash DOM Proxy
     var targets = [
         'terms', 'howtoplay', 'changelog', 'featuredVideo', 
