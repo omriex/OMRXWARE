@@ -27,8 +27,7 @@ async function runUpdater() {
             const injectionCode = `
 // --- OMRXWARE BOOTLOADER & UI REMOVER ---
 (function() {
-    // 1. SAFE Anti-Crash DOM Proxy
-    // Prevents the game from crashing when it tries to modify HTML texts we hide.
+    // 1. SAFE Anti-Crash DOM Proxy (Prevents missing-element crashes)
     var targets = [
         'terms', 'howtoplay', 'changelog', 'featuredVideo', 
         'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'
@@ -53,35 +52,43 @@ async function runUpdater() {
     if (document.head) document.head.appendChild(style);
     else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
 
-    // 3. CANVAS RENDERING HIJACK (The magic trick to remove the Grey Panels)
-    // The grey panels are drawn directly onto the <canvas>. CSS cannot hide them.
-    // We intercept the drawImage function and stop them from rendering entirely!
+    // 3. CRASH-PROOF CANVAS RENDERING HIJACK (Removes Grey Panels)
     const origDrawImage = CanvasRenderingContext2D.prototype.drawImage;
-    CanvasRenderingContext2D.prototype.drawImage = function(image, ...args) {
-        
-        // Check if we are currently on the Main Menu (nickname input is visible)
-        var nickInput = document.getElementById('nicknameInput');
-        var isMainMenu = nickInput && nickInput.offsetParent !== null;
+    CanvasRenderingContext2D.prototype.drawImage = function() {
+        try {
+            // Check if we are currently on the Main Menu
+            var nickInput = document.getElementById('nicknameInput');
+            var isMainMenu = nickInput && nickInput.offsetParent !== null;
 
-        if (isMainMenu) {
-            // Get the X coordinate where the game is trying to draw an image
-            var dx = args.length >= 8 ? args[4] : args[0];
-            var center = window.innerWidth / 2;
-            
-            // Devast UI panels are drawn without camera scaling (transform.a === 1)
-            // The scrolling background world is scaled, so this ensures we don't hide the background trees/ground!
-            var transform = this.getTransform();
-            var isUI = Math.abs(transform.a - 1) < 0.01 && Math.abs(transform.d - 1) < 0.01;
+            if (isMainMenu) {
+                var dx = undefined;
+                
+                // Get the X coordinate being drawn based on argument count
+                if (arguments.length === 3 || arguments.length === 5) {
+                    dx = arguments[1];
+                } else if (arguments.length === 9) {
+                    dx = arguments[5];
+                }
 
-            // If it is a UI element drawn on the far left or far right, BLOCK IT.
-            // This leaves the middle panel (center - 350 to center + 250) perfectly intact.
-            if (isUI && (dx < center - 350 || dx > center + 250)) {
-                return; // Skip drawing!
+                if (dx !== undefined) {
+                    var center = window.innerWidth / 2;
+                    var transform = this.getTransform();
+                    
+                    // UI panels are drawn with a 1.0 scale, game world scales when zooming
+                    var isUI = Math.abs(transform.a - 1) < 0.01 && Math.abs(transform.d - 1) < 0.01;
+
+                    // If it is UI on the far left or far right (Leaving a 700px safe zone in the middle)
+                    if (isUI && (dx < center - 350 || dx > center + 350)) {
+                        return; // Drop the frame (Hides the grey panels)
+                    }
+                }
             }
+        } catch (err) {
+            // Failsafe: If anything goes wrong, ignore it so the game NEVER crashes.
         }
         
-        // Draw everything else normally
-        return origDrawImage.apply(this, args);
+        // Pass the EXACT original arguments back to the native function
+        return origDrawImage.apply(this, arguments);
     };
 
     // 4. Inject the Omrxware script after 1s
@@ -90,7 +97,7 @@ async function runUpdater() {
             var script = document.createElement('script');
             script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
             document.body.appendChild(script);
-            console.log("OMRXWARE successfully injected! Canvas panels & HTML UI removed.");
+            console.log("OMRXWARE successfully injected! Left/Right Canvas panels & HTML UI removed.");
         } catch (e) {
             console.error("Injection error:", e);
         }
@@ -98,7 +105,7 @@ async function runUpdater() {
 })();
 // ---------------------------
 `;
-            // Add the bootloader to the TOP of the script so it protects the engine immediately
+            // Add the bootloader to the TOP of the script
             jsCode = injectionCode + '\n;\n' + jsCode; 
             
         } catch (err) {
