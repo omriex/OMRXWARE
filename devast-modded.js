@@ -54,7 +54,7 @@
                         // Asymmetrical Safe Zone:
                         // Extends left to -440px (Safely keeps Socials & Private Server button)
                         // Extends right to +300px (Safely keeps Survival & Lights, but executes the right panel)
-                        if (relX < -440 || relX > 300) {
+                        if (relX < -440 || relX > 275) {
                             return; // Stop drawing!
                         }
                     }
