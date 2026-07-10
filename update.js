@@ -17,66 +17,59 @@ async function runUpdater() {
 
         fs.writeFileSync('devast-original.js', jsCode);
 
-        // Apply Zoom patch
+        // Zoom patch (kept – works fine alone)
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
 
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
             const base64Script = Buffer.from(myCustomScript).toString('base64');
-            
-            const injectionCode = `
-// --- OMRXWARE BOOTLOADER & UI REMOVER (NO CANVAS HOOK) ---
-(function() {
-    console.log("[OMRXWARE] Bootloader starting (UI only – no canvas hooks)");
 
-    // 1. SAFE Anti-Crash DOM Proxy
-    var targets = [
-        'terms', 'howtoplay', 'changelog', 'featuredVideo', 
+            // NEW BOOTLOADER – no overrides, just CSS + Blob injection
+            const injectionCode = `
+// --- OMRXWARE BOOTLOADER (MINIMAL, NO NATIVE OVERRIDES) ---
+(function() {
+    console.log("[OMRXWARE] Bootloader starting – CSS only + Blob injection");
+
+    // 1. Hide UI panels using pure CSS (no getElementById override)
+    const targets = [
+        'terms', 'howtoplay', 'changelog', 'featuredVideo',
         'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'
     ];
-    
-    var origGet = document.getElementById;
-    document.getElementById = function(id) {
-        var el = origGet.call(document, id);
-        if (!el && targets.indexOf(id) !== -1) {
-            el = document.createElement('div');
-            el.id = id;
-            el.style.display = 'none'; 
-        }
-        return el;
-    };
-
-    // 2. Safely Hide Target UI Texts via CSS
-    var style = document.createElement('style');
-    style.innerHTML = '#' + targets.join(', #') + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
+    const style = document.createElement('style');
+    style.innerHTML = targets.map(id => '#' + id).join(', ') + 
+        ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
     style.innerHTML += ' .bebebaba { display: none !important; }';
     
     if (document.head) document.head.appendChild(style);
     else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
 
-    // 3. Inject Omrxware
-    setTimeout(function() {
-        try {
-            var script = document.createElement('script');
-            script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
-            document.body.appendChild(script);
-            console.log("OMRXWARE successfully injected! UI hidden, no canvas hooks.");
-        } catch (e) {
-            console.error("Injection error:", e);
-        }
-    }, 1000);
+    // 2. Inject omrxware.js via a clean Blob URL (avoids eval/innerHTML detection)
+    try {
+        const scriptContent = atob('${base64Script}');
+        const blob = new Blob([scriptContent], { type: 'application/javascript' });
+        const url = URL.createObjectURL(blob);
+        const script = document.createElement('script');
+        script.src = url;
+        script.onload = () => {
+            URL.revokeObjectURL(url);
+            console.log("[OMRXWARE] ✅ Script injected via Blob URL.");
+        };
+        document.body.appendChild(script);
+    } catch (e) {
+        console.error("[OMRXWARE] ❌ Injection error:", e);
+    }
 })();
 // ---------------------------
 `;
-            // Add the bootloader to the TOP of the script
-            jsCode = injectionCode + '\n;\n' + jsCode; 
-            
+            // Add bootloader to the top of the game code
+            jsCode = injectionCode + '\n;\n' + jsCode;
+
         } catch (err) {
             console.error("Could not find omrxware.js.");
         }
 
         fs.writeFileSync('devast-modded.js', jsCode);
-        console.log("Successfully generated devast-modded.js");
+        console.log("✅ Successfully generated devast-modded.js (no overrides, Blob injection)");
 
     } catch (error) {
         console.error(error);
