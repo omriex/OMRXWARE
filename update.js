@@ -27,22 +27,33 @@ async function runUpdater() {
             const injectionCode = `
 // --- OMRXWARE BOOTLOADER ---
 (function() {
-    // 1. Anti-Crash DOM Proxy: Prevents ANY "Cannot read properties of null (reading 'style')" crashes.
-    // If the game or an ad-blocker removes an element, we supply a dummy element so the game's JS engine doesn't crash!
+    // 1. SAFE Anti-Crash DOM Proxy
+    // We ONLY intercept the exact elements we want to hide.
+    // This stops the game from accidentally binding to fake Name Inputs and Server Selects!
+    var targets = [
+        'terms', 'howtoplay', 'changelog', 'featuredVideo', 
+        'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'
+    ];
+    
     var origGet = document.getElementById;
     document.getElementById = function(id) {
         var el = origGet.call(document, id);
-        if (!el) {
+        
+        // If the game asks for one of our targets and it isn't ready yet, give it a fake dummy so it doesn't crash.
+        if (!el && targets.indexOf(id) !== -1) {
             el = document.createElement('div');
             el.id = id;
-            el.style.display = 'none'; // Safe dummy element
+            el.style.display = 'none'; 
         }
         return el;
     };
 
-    // 2. Safely Hide UI Elements via CSS (Forces them to 0 pixels entirely)
+    // 2. Safely Hide Target UI Elements via CSS
     var style = document.createElement('style');
-    style.innerHTML = '#terms, #howtoplay, #changelog, #featuredVideo, #bebebaba, .bebebaba, #devast-io_970x250, #preroll, #exapush-popup { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; left: -9999px !important; top: -9999px !important; width: 0 !important; height: 0 !important; max-width: 0 !important; max-height: 0 !important; overflow: hidden !important; }';
+    style.innerHTML = '#' + targets.join(', #') + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
+    
+    // Hide ad classes too
+    style.innerHTML += ' .bebebaba { display: none !important; }';
     
     if (document.head) {
         document.head.appendChild(style);
@@ -58,7 +69,7 @@ async function runUpdater() {
             var script = document.createElement('script');
             script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
             document.body.appendChild(script);
-            console.log("OMRXWARE successfully injected & UI hidden safely without crashing!");
+            console.log("OMRXWARE successfully injected! HTML UI hidden properly.");
         } catch (e) {
             console.error("Injection error:", e);
         }
@@ -66,7 +77,7 @@ async function runUpdater() {
 })();
 // ---------------------------
 `;
-            // Notice this is added to the TOP of the JS file now, ensuring protection starts instantly!
+            // Add the bootloader to the TOP of the script
             jsCode = injectionCode + '\n;\n' + jsCode; 
             
         } catch (err) {
