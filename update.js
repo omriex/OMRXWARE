@@ -24,92 +24,115 @@ async function runUpdater() {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
             const base64Script = Buffer.from(myCustomScript).toString('base64');
 
+            // --- FIXED BOOTLOADER: DELAYED MENU CHECK ---
             const injectionCode = `
-// --- OMRXWARE BOOTLOADER & UI REMOVER (MENU-ONLY) ---
+// --- OMRXWARE BOOTLOADER (DELAYED MENU DETECTION) ---
 (function() {
-    // Check if we are on the main menu (nicknameInput exists and is visible)
-    var nickInput = document.getElementById('nicknameInput');
-    var isMainMenu = nickInput && nickInput.offsetParent !== null;
+    console.log("[OMRXWARE] Bootloader started – waiting for menu...");
 
-    if (!isMainMenu) {
-        console.log("[OMRXWARE] Not in main menu – skipping all modifications.");
-        return;
-    }
+    // Function that actually applies all modifications
+    function applyModifications() {
+        console.log("[OMRXWARE] Main menu detected – applying UI hiding & canvas hook.");
 
-    console.log("[OMRXWARE] Main menu detected – applying UI hiding & canvas hook.");
+        // 1. SAFE Anti-Crash DOM Proxy
+        var targets = [
+            'terms', 'howtoplay', 'changelog', 'featuredVideo', 
+            'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'
+        ];
+        
+        var origGet = document.getElementById;
+        document.getElementById = function(id) {
+            var el = origGet.call(document, id);
+            if (!el && targets.indexOf(id) !== -1) {
+                el = document.createElement('div');
+                el.id = id;
+                el.style.display = 'none'; 
+            }
+            return el;
+        };
 
-    // 1. SAFE Anti-Crash DOM Proxy
-    var targets = [
-        'terms', 'howtoplay', 'changelog', 'featuredVideo', 
-        'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'
-    ];
-    
-    var origGet = document.getElementById;
-    document.getElementById = function(id) {
-        var el = origGet.call(document, id);
-        if (!el && targets.indexOf(id) !== -1) {
-            el = document.createElement('div');
-            el.id = id;
-            el.style.display = 'none'; 
-        }
-        return el;
-    };
+        // 2. Safely Hide Target UI Texts via CSS
+        var style = document.createElement('style');
+        style.innerHTML = '#' + targets.join(', #') + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
+        style.innerHTML += ' .bebebaba { display: none !important; }';
+        
+        if (document.head) document.head.appendChild(style);
+        else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
 
-    // 2. Safely Hide Target UI Texts via CSS
-    var style = document.createElement('style');
-    style.innerHTML = '#' + targets.join(', #') + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
-    style.innerHTML += ' .bebebaba { display: none !important; }';
-    
-    if (document.head) document.head.appendChild(style);
-    else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
+        // 3. FLAWLESS CANVAS RENDERING HIJACK
+        const origDrawImage = CanvasRenderingContext2D.prototype.drawImage;
+        CanvasRenderingContext2D.prototype.drawImage = function() {
+            try {
+                var nickInput = document.getElementById('nicknameInput');
+                var isMainMenu = nickInput && nickInput.offsetParent !== null;
 
-    // 3. FLAWLESS CANVAS RENDERING HIJACK
-    const origDrawImage = CanvasRenderingContext2D.prototype.drawImage;
-    CanvasRenderingContext2D.prototype.drawImage = function() {
-        try {
-            var nickInput = document.getElementById('nicknameInput');
-            var isMainMenu = nickInput && nickInput.offsetParent !== null;
+                if (isMainMenu) {
+                    var dx = undefined;
+                    
+                    // Fetch the X coordinate
+                    if (arguments.length === 3 || arguments.length === 5) dx = arguments[1];
+                    else if (arguments.length === 9) dx = arguments[5];
 
-            if (isMainMenu) {
-                var dx = undefined;
-                
-                // Fetch the X coordinate
-                if (arguments.length === 3 || arguments.length === 5) dx = arguments[1];
-                else if (arguments.length === 9) dx = arguments[5];
+                    if (dx !== undefined) {
+                        var transform = this.getTransform();
+                        var isUI = Math.abs(transform.a - 1) < 0.05 || Math.abs(transform.a - window.devicePixelRatio) < 0.05;
 
-                if (dx !== undefined) {
-                    var transform = this.getTransform();
-                    var isUI = Math.abs(transform.a - 1) < 0.05 || Math.abs(transform.a - window.devicePixelRatio) < 0.05;
+                        if (isUI) {
+                            var absX = dx * transform.a + transform.e;
+                            var canvasCenter = this.canvas.width / 2;
+                            
+                            var relX = (absX - canvasCenter) / transform.a;
 
-                    if (isUI) {
-                        var absX = dx * transform.a + transform.e;
-                        var canvasCenter = this.canvas.width / 2;
-                        
-                        var relX = (absX - canvasCenter) / transform.a;
-
-                        // Asymmetrical Safe Zone:
-                        if (relX < -440 || relX > 275) {
-                            return; // Stop drawing!
+                            // Asymmetrical Safe Zone
+                            if (relX < -440 || relX > 275) {
+                                return; // Stop drawing!
+                            }
                         }
                     }
                 }
-            }
-        } catch (err) {}
-        
-        return origDrawImage.apply(this, arguments);
-    };
+            } catch (err) {}
+            
+            return origDrawImage.apply(this, arguments);
+        };
 
-    // 4. Inject Omrxware
-    setTimeout(function() {
-        try {
-            var script = document.createElement('script');
-            script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
-            document.body.appendChild(script);
-            console.log("OMRXWARE successfully injected! Menu perfectly isolated.");
-        } catch (e) {
-            console.error("Injection error:", e);
+        // 4. Inject Omrxware
+        setTimeout(function() {
+            try {
+                var script = document.createElement('script');
+                script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
+                document.body.appendChild(script);
+                console.log("OMRXWARE successfully injected! Menu perfectly isolated.");
+            } catch (e) {
+                console.error("Injection error:", e);
+            }
+        }, 1000);
+    }
+
+    // Try to detect the menu immediately, but if not ready, wait.
+    function checkAndApply() {
+        var nickInput = document.getElementById('nicknameInput');
+        var isMainMenu = nickInput && nickInput.offsetParent !== null;
+        if (isMainMenu) {
+            applyModifications();
+            return true;
         }
-    }, 1000);
+        return false;
+    }
+
+    // First attempt after a short delay (allows DOM to load)
+    setTimeout(function() {
+        if (!checkAndApply()) {
+            console.log("[OMRXWARE] Menu not yet detected – setting up observer...");
+            // Set up a MutationObserver to watch for the nicknameInput
+            var observer = new MutationObserver(function() {
+                if (checkAndApply()) {
+                    observer.disconnect();
+                }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+        }
+    }, 500);
+
 })();
 // ---------------------------
 `;
