@@ -28,30 +28,18 @@ async function runUpdater() {
             const injectionCode = `
 setTimeout(function() {
     try {
-        // 1. Inject hardcoded CSS to permanently hide them and their ad containers directly in the HTML
+        // Inject CSS to permanently hide the UI elements safely.
+        // Using !important overrides the game's inline style updates without breaking the JS engine!
+        // We leave the HTML elements in the DOM so the game doesn't crash when it tries to read their styles.
         var style = document.createElement('style');
-        style.innerHTML = '#terms, #howtoplay, #changelog, #featuredVideo, #bebebaba, .bebebaba, #devast-io_970x250, #preroll, #exapush-popup { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; width: 0 !important; height: 0 !important; z-index: -9999 !important; }';
+        style.innerHTML = '#terms, #howtoplay, #changelog, #featuredVideo, #bebebaba, .bebebaba, #devast-io_970x250, #preroll, #exapush-popup { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; width: 0 !important; height: 0 !important; z-index: -9999 !important; left: -9999px !important; top: -9999px !important; }';
         document.head.appendChild(style);
 
-        // 2. Run a loop to brutally remove them from the DOM. 
-        // Using setInterval ensures we catch popups or ads that are generated a few seconds AFTER the page loads.
-        setInterval(function() {
-            var idsToRemove = ['terms', 'howtoplay', 'changelog', 'featuredVideo', 'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'];
-            
-            idsToRemove.forEach(function(id) {
-                var el = document.getElementById(id);
-                if (el) el.remove();
-            });
-            
-            var classEls = document.querySelectorAll('.bebebaba');
-            classEls.forEach(function(el) { el.remove(); });
-        }, 1500);
-
-        // 3. Load Omrxware
+        // Load Omrxware
         var script = document.createElement('script');
         script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
         document.body.appendChild(script);
-        console.log("OMRXWARE successfully injected & HTML UI Elements removed!");
+        console.log("OMRXWARE successfully injected & HTML UI Elements hidden safely!");
     } catch (e) {
         console.error("Injection error:", e);
     }
