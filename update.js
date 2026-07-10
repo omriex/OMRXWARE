@@ -17,170 +17,111 @@ async function runUpdater() {
 
         fs.writeFileSync('devast-original.js', jsCode);
 
-        // Apply Zoom patch
+        // Apply Zoom patch (unchanged)
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
 
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
             const base64Script = Buffer.from(myCustomScript).toString('base64');
 
-            // --- ENHANCED UI HIDING + PROXY-ONLY BOOTLOADER ---
             const injectionCode = `
-// --- OMRXWARE BOOTLOADER (UI Hiding + Proxy Only, No Canvas/WebSocket) ---
+// --- OMRXWARE BOOTLOADER & UI REMOVER (MENU-ONLY) ---
 (function() {
-    console.log("[OMRXWARE] Bootloader starting (UI hiding + proxy-only)");
+    // Check if we are on the main menu (nicknameInput exists and is visible)
+    var nickInput = document.getElementById('nicknameInput');
+    var isMainMenu = nickInput && nickInput.offsetParent !== null;
 
-    // ========== 1. AGGRESSIVE UI HIDING ==========
-    // Target IDs (known from game)
-    const uiTargets = [
-        'terms', 'howtoplay', 'changelog', 'featuredVideo',
+    if (!isMainMenu) {
+        console.log("[OMRXWARE] Not in main menu – skipping all modifications.");
+        return;
+    }
+
+    console.log("[OMRXWARE] Main menu detected – applying UI hiding & canvas hook.");
+
+    // 1. SAFE Anti-Crash DOM Proxy
+    var targets = [
+        'terms', 'howtoplay', 'changelog', 'featuredVideo', 
         'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'
     ];
+    
+    var origGet = document.getElementById;
+    document.getElementById = function(id) {
+        var el = origGet.call(document, id);
+        if (!el && targets.indexOf(id) !== -1) {
+            el = document.createElement('div');
+            el.id = id;
+            el.style.display = 'none'; 
+        }
+        return el;
+    };
 
-    // Additional classes that often appear on popups/overlays
-    const uiClasses = [
-        'popup', 'modal', 'overlay', 'panel', 'dialog',
-        'ui-panel', 'game-overlay', 'menu-panel', 'popup-container'
-    ];
-
-    // Build CSS rules
-    let cssRules = '';
-    uiTargets.forEach(id => {
-        cssRules += '#' + id + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
-    });
-    uiClasses.forEach(cls => {
-        cssRules += '.' + cls + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
-    });
-    // Also hide any element with "popup" or "modal" in its ID (catch-all)
-    cssRules += '[id*="popup"] { display: none !important; }';
-    cssRules += '[id*="modal"] { display: none !important; }';
-    cssRules += '[id*="overlay"] { display: none !important; }';
-
-    const style = document.createElement('style');
-    style.innerHTML = cssRules;
+    // 2. Safely Hide Target UI Texts via CSS
+    var style = document.createElement('style');
+    style.innerHTML = '#' + targets.join(', #') + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
+    style.innerHTML += ' .bebebaba { display: none !important; }';
+    
     if (document.head) document.head.appendChild(style);
     else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
 
-    // Safe getElementById stub – returns dummy for known IDs
-    const origGet = document.getElementById;
-    document.getElementById = function(id) {
-        const el = origGet.call(document, id);
-        if (el) return el;
-        if (uiTargets.includes(id)) {
-            const dummy = document.createElement('div');
-            dummy.id = id;
-            dummy.style.display = 'none';
-            return dummy;
-        }
-        return null;
-    };
+    // 3. FLAWLESS CANVAS RENDERING HIJACK
+    const origDrawImage = CanvasRenderingContext2D.prototype.drawImage;
+    CanvasRenderingContext2D.prototype.drawImage = function() {
+        try {
+            var nickInput = document.getElementById('nicknameInput');
+            var isMainMenu = nickInput && nickInput.offsetParent !== null;
 
-    // MutationObserver – hide any newly added elements that match our selectors
-    const observer = new MutationObserver(function(mutations) {
-        mutations.forEach(mutation => {
-            mutation.addedNodes.forEach(node => {
-                if (node.nodeType === 1) { // element node
-                    // Check if the node itself matches any target
-                    const id = node.id;
-                    const classList = node.classList;
-                    let shouldHide = false;
-                    if (id && uiTargets.includes(id)) shouldHide = true;
-                    if (!shouldHide) {
-                        for (let cls of uiClasses) {
-                            if (classList.contains(cls)) { shouldHide = true; break; }
+            if (isMainMenu) {
+                var dx = undefined;
+                
+                // Fetch the X coordinate
+                if (arguments.length === 3 || arguments.length === 5) dx = arguments[1];
+                else if (arguments.length === 9) dx = arguments[5];
+
+                if (dx !== undefined) {
+                    var transform = this.getTransform();
+                    var isUI = Math.abs(transform.a - 1) < 0.05 || Math.abs(transform.a - window.devicePixelRatio) < 0.05;
+
+                    if (isUI) {
+                        var absX = dx * transform.a + transform.e;
+                        var canvasCenter = this.canvas.width / 2;
+                        
+                        var relX = (absX - canvasCenter) / transform.a;
+
+                        // Asymmetrical Safe Zone:
+                        if (relX < -440 || relX > 275) {
+                            return; // Stop drawing!
                         }
-                    }
-                    if (!shouldHide) {
-                        // Check if ID contains popup/modal/overlay
-                        if (id && (id.includes('popup') || id.includes('modal') || id.includes('overlay'))) {
-                            shouldHide = true;
-                        }
-                    }
-                    if (shouldHide) {
-                        node.style.display = 'none';
-                        node.style.opacity = '0';
-                        node.style.visibility = 'hidden';
-                        node.style.pointerEvents = 'none';
-                        node.style.zIndex = '-9999';
-                        console.log('[OMRXWARE] Hidden UI element:', node);
                     }
                 }
-            });
-        });
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    // ========== 2. NETWORK PROXY (fetch + XHR, NO WebSocket) ==========
-    window.__proxy = {
-        hooks: { beforeRequest: [], afterResponse: [] },
-        registerHook: function(type, callback) {
-            if (this.hooks[type]) this.hooks[type].push(callback);
-        }
+            }
+        } catch (err) {}
+        
+        return origDrawImage.apply(this, arguments);
     };
 
-    // Intercept fetch
-    const origFetch = window.fetch;
-    window.fetch = function(url, options) {
-        const req = { url, options };
-        window.__proxy.hooks.beforeRequest.forEach(h => h(req));
-        return origFetch(url, options).then(res => {
-            const resp = { url, status: res.status };
-            window.__proxy.hooks.afterResponse.forEach(h => h(resp));
-            return res;
-        });
-    };
-
-    // Intercept XMLHttpRequest
-    const origXHR = window.XMLHttpRequest;
-    window.XMLHttpRequest = function() {
-        const xhr = new origXHR();
-        const origOpen = xhr.open;
-        const origSend = xhr.send;
-
-        xhr.open = function(method, url) {
-            this._method = method;
-            this._url = url;
-            return origOpen.apply(this, arguments);
-        };
-
-        xhr.send = function(body) {
-            const req = { method: this._method, url: this._url, body };
-            window.__proxy.hooks.beforeRequest.forEach(h => h(req));
-            this.addEventListener('load', function() {
-                const resp = { method: this._method, url: this._url, status: this.status, response: this.response };
-                window.__proxy.hooks.afterResponse.forEach(h => h(resp));
-            });
-            return origSend.apply(this, arguments);
-        };
-        return xhr;
-    };
-
-    // ========== 3. INJECT OMRXWARE SCRIPT ==========
+    // 4. Inject Omrxware
     setTimeout(function() {
         try {
-            const script = document.createElement('script');
+            var script = document.createElement('script');
             script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
             document.body.appendChild(script);
-            console.log("[OMRXWARE] ✅ Custom script injected successfully.");
+            console.log("OMRXWARE successfully injected! Menu perfectly isolated.");
         } catch (e) {
-            console.error("[OMRXWARE] ❌ Injection error:", e);
+            console.error("Injection error:", e);
         }
     }, 1000);
-
-    console.log("[OMRXWARE] Bootloader ready. UI hidden, proxy active.");
 })();
 // ---------------------------
 `;
-
-            // Prepend bootloader to the game code
-            jsCode = injectionCode + '\n;\n' + jsCode;
-
+            // Add the bootloader to the TOP of the script
+            jsCode = injectionCode + '\n;\n' + jsCode; 
+            
         } catch (err) {
             console.error("Could not find omrxware.js.");
         }
 
         fs.writeFileSync('devast-modded.js', jsCode);
-        console.log("✅ Successfully generated devast-modded.js (with UI hiding + proxy-only)");
+        console.log("Successfully generated devast-modded.js");
 
     } catch (error) {
         console.error(error);
