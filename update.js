@@ -17,101 +17,119 @@ async function runUpdater() {
 
         fs.writeFileSync('devast-original.js', jsCode);
 
-        // Zoom patch (kept – works fine)
+        // Apply Zoom patch
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
 
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
             const base64Script = Buffer.from(myCustomScript).toString('base64');
-
-            // --- BOOTLOADER: Only CSS hiding + MutationObserver + innerHTML injection ---
+            
             const injectionCode = `
-// --- OMRXWARE BOOTLOADER (No overrides, only CSS + observer) ---
+// --- OMRXWARE BOOTLOADER & UI REMOVER ---
 (function() {
-    console.log("[OMRXWARE] Bootloader starting (UI hiding via CSS + observer)");
-
-    // 1. Hide all known UI panels using pure CSS
-    const targets = [
-        'terms', 'howtoplay', 'changelog', 'featuredVideo',
+    // 1. SAFE Anti-Crash DOM Proxy
+    var targets = [
+        'terms', 'howtoplay', 'changelog', 'featuredVideo', 
         'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'
     ];
-    // Also hide any element with common popup/modal classes
-    const classes = ['popup', 'modal', 'overlay', 'panel', 'dialog', 'ui-panel', 'game-overlay', 'menu-panel', 'popup-container'];
+    
+    var origGet = document.getElementById;
+    document.getElementById = function(id) {
+        var el = origGet.call(document, id);
+        if (!el && targets.indexOf(id) !== -1) {
+            el = document.createElement('div');
+            el.id = id;
+            el.style.display = 'none'; 
+        }
+        return el;
+    };
 
-    let css = '';
-    targets.forEach(id => {
-        css += '#' + id + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
-    });
-    classes.forEach(cls => {
-        css += '.' + cls + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
-    });
-    // Extra catch-all for IDs containing popup/modal/overlay
-    css += '[id*="popup"] { display: none !important; }';
-    css += '[id*="modal"] { display: none !important; }';
-    css += '[id*="overlay"] { display: none !important; }';
-
-    const style = document.createElement('style');
-    style.innerHTML = css;
+    // 2. Safely Hide Target UI Texts via CSS
+    var style = document.createElement('style');
+    style.innerHTML = '#' + targets.join(', #') + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
+    style.innerHTML += ' .bebebaba { display: none !important; }';
+    
     if (document.head) document.head.appendChild(style);
     else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
 
-    // 2. MutationObserver to hide any newly added UI elements
-    const observer = new MutationObserver(function(mutations) {
-        mutations.forEach(mutation => {
-            mutation.addedNodes.forEach(node => {
-                if (node.nodeType === 1) {
-                    const id = node.id;
-                    const classList = node.classList;
-                    let hide = false;
-                    if (id && targets.includes(id)) hide = true;
-                    if (!hide) {
-                        for (let cls of classes) {
-                            if (classList.contains(cls)) { hide = true; break; }
-                        }
-                    }
-                    if (!hide && id) {
-                        if (id.includes('popup') || id.includes('modal') || id.includes('overlay')) hide = true;
-                    }
-                    if (hide) {
-                        node.style.display = 'none';
-                        node.style.opacity = '0';
-                        node.style.visibility = 'hidden';
-                        node.style.pointerEvents = 'none';
-                        node.style.zIndex = '-9999';
-                        node.style.width = '0';
-                        node.style.height = '0';
-                        console.log("[OMRXWARE] Hidden new element:", node);
+    // 3. ZERO-LAG CANVAS HIJACK
+    // Use a lightweight timer to check if we are in the menu.
+    // This stops the JS engine from choking and causing you to disconnect/die on spawn!
+    var isMainMenu = true;
+    setInterval(function() {
+        var nickContainer = document.getElementById('nickname');
+        var nickInput = document.getElementById('nicknameInput');
+        
+        // If the nickname wrapper or input is hidden, we are officially in-game.
+        if (nickContainer && nickContainer.style.display === 'none') {
+            isMainMenu = false;
+        } else if (nickInput && nickInput.offsetParent === null) {
+            isMainMenu = false;
+        } else {
+            isMainMenu = true;
+        }
+    }, 500);
+
+    const origDrawImage = CanvasRenderingContext2D.prototype.drawImage;
+    CanvasRenderingContext2D.prototype.drawImage = function() {
+        // QUICK EXIT: Checks a single boolean instead of querying the DOM. Zero FPS lag!
+        if (!isMainMenu) {
+            return origDrawImage.apply(this, arguments);
+        }
+
+        try {
+            var dx = undefined;
+            if (arguments.length === 3 || arguments.length === 5) dx = arguments[1];
+            else if (arguments.length === 9) dx = arguments[5];
+
+            if (dx !== undefined) {
+                var transform = this.getTransform();
+                var isUI = Math.abs(transform.a - 1) < 0.05 || Math.abs(transform.a - window.devicePixelRatio) < 0.05;
+
+                if (isUI) {
+                    var absX = dx * transform.a + transform.e;
+                    var canvasCenter = this.canvas.width / 2;
+                    var relX = (absX - canvasCenter) / transform.a;
+
+                    // Asymmetrical Safe Zone
+                    if (relX < -440 || relX > 275) {
+                        return; // Drop frame
                     }
                 }
-            });
-        });
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
+            }
+        } catch (err) {}
+        
+        return origDrawImage.apply(this, arguments);
+    };
+    
+    // ANTI-CHEAT SPOOF: Disguise our hooked function so the game thinks it's native browser code
+    CanvasRenderingContext2D.prototype.drawImage.toString = function() {
+        return 'function drawImage() { [native code] }';
+    };
 
-    // 3. Inject omrxware.js using the original innerHTML method (works perfectly)
+    // 4. Inject Omrxware
     setTimeout(function() {
         try {
             var script = document.createElement('script');
             script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
             document.body.appendChild(script);
-            console.log("[OMRXWARE] ✅ Script injected successfully.");
+            console.log("OMRXWARE successfully injected! Lag fixed, Anti-Cheat spoofed.");
         } catch (e) {
-            console.error("[OMRXWARE] ❌ Injection error:", e);
+            console.error("Injection error:", e);
         }
     }, 1000);
-
-    console.log("[OMRXWARE] Bootloader ready – UI hidden, observer active.");
 })();
 // ---------------------------
 `;
-            jsCode = injectionCode + '\n;\n' + jsCode;
-
+            // Add the bootloader to the TOP of the script
+            jsCode = injectionCode + '\n;\n' + jsCode; 
+            
         } catch (err) {
             console.error("Could not find omrxware.js.");
         }
 
         fs.writeFileSync('devast-modded.js', jsCode);
-        console.log("✅ Successfully generated devast-modded.js (UI hiding + observer, no overrides)");
+        console.log("Successfully generated devast-modded.js");
 
     } catch (error) {
         console.error(error);
