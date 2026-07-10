@@ -17,122 +17,92 @@ async function runUpdater() {
 
         fs.writeFileSync('devast-original.js', jsCode);
 
-        // Apply Zoom patch (unchanged)
+        // Apply Zoom patch
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
 
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
             const base64Script = Buffer.from(myCustomScript).toString('base64');
-
-            // --- FIXED BOOTLOADER: DELAYED MENU CHECK ---
+            
             const injectionCode = `
-// --- OMRXWARE BOOTLOADER (DELAYED MENU DETECTION) ---
+// --- OMRXWARE BOOTLOADER & UI REMOVER ---
 (function() {
-    console.log("[OMRXWARE] Bootloader started – waiting for menu...");
+    // 1. SAFE Anti-Crash DOM Proxy
+    var targets = [
+        'terms', 'howtoplay', 'changelog', 'featuredVideo', 
+        'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'
+    ];
+    
+    var origGet = document.getElementById;
+    document.getElementById = function(id) {
+        var el = origGet.call(document, id);
+        if (!el && targets.indexOf(id) !== -1) {
+            el = document.createElement('div');
+            el.id = id;
+            el.style.display = 'none'; 
+        }
+        return el;
+    };
 
-    // Function that actually applies all modifications
-    function applyModifications() {
-        console.log("[OMRXWARE] Main menu detected – applying UI hiding & canvas hook.");
+    // 2. Safely Hide Target UI Texts via CSS
+    var style = document.createElement('style');
+    style.innerHTML = '#' + targets.join(', #') + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
+    style.innerHTML += ' .bebebaba { display: none !important; }';
+    
+    if (document.head) document.head.appendChild(style);
+    else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
 
-        // 1. SAFE Anti-Crash DOM Proxy
-        var targets = [
-            'terms', 'howtoplay', 'changelog', 'featuredVideo', 
-            'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'
-        ];
-        
-        var origGet = document.getElementById;
-        document.getElementById = function(id) {
-            var el = origGet.call(document, id);
-            if (!el && targets.indexOf(id) !== -1) {
-                el = document.createElement('div');
-                el.id = id;
-                el.style.display = 'none'; 
-            }
-            return el;
-        };
+    // 3. FLAWLESS & OPTIMIZED CANVAS RENDERING HIJACK
+    const origDrawImage = CanvasRenderingContext2D.prototype.drawImage;
+    CanvasRenderingContext2D.prototype.drawImage = function() {
+        // QUICK EXIT: Check if the nickname input is visible.
+        // If we are spawned in-game, skip all math and draw normally to save FPS!
+        var nickInput = document.getElementById('nicknameInput');
+        if (!nickInput || nickInput.offsetParent === null) {
+            return origDrawImage.apply(this, arguments);
+        }
 
-        // 2. Safely Hide Target UI Texts via CSS
-        var style = document.createElement('style');
-        style.innerHTML = '#' + targets.join(', #') + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
-        style.innerHTML += ' .bebebaba { display: none !important; }';
-        
-        if (document.head) document.head.appendChild(style);
-        else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
+        try {
+            var dx = undefined;
+            
+            // Fetch the X coordinate
+            if (arguments.length === 3 || arguments.length === 5) dx = arguments[1];
+            else if (arguments.length === 9) dx = arguments[5];
 
-        // 3. FLAWLESS CANVAS RENDERING HIJACK
-        const origDrawImage = CanvasRenderingContext2D.prototype.drawImage;
-        CanvasRenderingContext2D.prototype.drawImage = function() {
-            try {
-                var nickInput = document.getElementById('nicknameInput');
-                var isMainMenu = nickInput && nickInput.offsetParent !== null;
+            if (dx !== undefined) {
+                var transform = this.getTransform();
+                var isUI = Math.abs(transform.a - 1) < 0.05 || Math.abs(transform.a - window.devicePixelRatio) < 0.05;
 
-                if (isMainMenu) {
-                    var dx = undefined;
+                if (isUI) {
+                    var absX = dx * transform.a + transform.e;
+                    var canvasCenter = this.canvas.width / 2;
                     
-                    // Fetch the X coordinate
-                    if (arguments.length === 3 || arguments.length === 5) dx = arguments[1];
-                    else if (arguments.length === 9) dx = arguments[5];
+                    var relX = (absX - canvasCenter) / transform.a;
 
-                    if (dx !== undefined) {
-                        var transform = this.getTransform();
-                        var isUI = Math.abs(transform.a - 1) < 0.05 || Math.abs(transform.a - window.devicePixelRatio) < 0.05;
-
-                        if (isUI) {
-                            var absX = dx * transform.a + transform.e;
-                            var canvasCenter = this.canvas.width / 2;
-                            
-                            var relX = (absX - canvasCenter) / transform.a;
-
-                            // Asymmetrical Safe Zone
-                            if (relX < -440 || relX > 275) {
-                                return; // Stop drawing!
-                            }
-                        }
+                    // Asymmetrical Safe Zone (User adjusted to 275)
+                    // Extends left to -440px
+                    // Extends right to +275px 
+                    if (relX < -440 || relX > 275) {
+                        return; // Stop drawing the side panels!
                     }
                 }
-            } catch (err) {}
-            
-            return origDrawImage.apply(this, arguments);
-        };
-
-        // 4. Inject Omrxware
-        setTimeout(function() {
-            try {
-                var script = document.createElement('script');
-                script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
-                document.body.appendChild(script);
-                console.log("OMRXWARE successfully injected! Menu perfectly isolated.");
-            } catch (e) {
-                console.error("Injection error:", e);
             }
-        }, 1000);
-    }
+        } catch (err) {}
+        
+        return origDrawImage.apply(this, arguments);
+    };
 
-    // Try to detect the menu immediately, but if not ready, wait.
-    function checkAndApply() {
-        var nickInput = document.getElementById('nicknameInput');
-        var isMainMenu = nickInput && nickInput.offsetParent !== null;
-        if (isMainMenu) {
-            applyModifications();
-            return true;
-        }
-        return false;
-    }
-
-    // First attempt after a short delay (allows DOM to load)
+    // 4. Inject Omrxware
     setTimeout(function() {
-        if (!checkAndApply()) {
-            console.log("[OMRXWARE] Menu not yet detected – setting up observer...");
-            // Set up a MutationObserver to watch for the nicknameInput
-            var observer = new MutationObserver(function() {
-                if (checkAndApply()) {
-                    observer.disconnect();
-                }
-            });
-            observer.observe(document.body, { childList: true, subtree: true });
+        try {
+            var script = document.createElement('script');
+            script.innerHTML = decodeURIComponent(escape(atob('${base64Script}')));
+            document.body.appendChild(script);
+            console.log("OMRXWARE successfully injected! Menu isolated and In-Game FPS optimized.");
+        } catch (e) {
+            console.error("Injection error:", e);
         }
-    }, 500);
-
+    }, 1000);
 })();
 // ---------------------------
 `;
