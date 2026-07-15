@@ -1,13 +1,14 @@
+
 const fs = require('fs');
 
 async function runUpdater() {
     try {
-        console.log("Fetching Devast.io...");
+        console.log('Fetching Devast.io...');
         const htmlResponse = await fetch('https://devast.io/');
         const html = await htmlResponse.text();
 
         const scriptMatch = html.match(/src="([^"]*client\.[0-9.]*min\.js[^"]*)"/i);
-        if (!scriptMatch) throw new Error("Could not find the client.js file.");
+        if (!scriptMatch) throw new Error('Could not find the client.js file.');
 
         let jsUrl = scriptMatch[1];
         if (!jsUrl.startsWith('http')) jsUrl = 'https://devast.io/' + jsUrl.replace(/^\//, '');
@@ -17,80 +18,67 @@ async function runUpdater() {
         let jsCode = await jsResponse.text();
 
         fs.writeFileSync('devast-original.js', jsCode);
+        console.log('[OK] Saved devast-original.js');
 
-        // Physics modifier
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
+        console.log('[OK] Physics modifier applied');
 
-        // Signature patch
+        const AC_SENTINELS = [
+            '999',
+            '0x3[Ee]7',
+            '0X3[Ee]7',
+            '01747',       
+            '0x3e7',
+        ];
+        const sentinelAlt = AC_SENTINELS.join('|');
+
         jsCode = jsCode.replace(
-            /(\[\s*\d+\s*,\s*0[0-7]+\s*\]|\[\s*\d+\s*,\s*\d+\s*\])(?=\s*;[^}]{0,300}catch)/,
-            `(function(){var _v=[30,1133];_v.toString=function(){return"OMRXWARE";};return _v;})()`
+            new RegExp('[?]\\s*([^;:?]{1,60}?)\\s*:\\s*(' + sentinelAlt + ')(?=[\\s;,)[\\]])', 'g'),
+            function(_, trueVal) { return '? ' + trueVal + ' : 0'; }
         );
 
-        // --- NEW: DYNAMIC FALLBACK PATTERN ---
-        // This targets the structure "flag = 1; if(flag)" or similar patterns dynamically
-        // if the hardcoded Unicode variables change or scramble during updates.
-        jsCode = jsCode.replace(/([a-zA-Z0-9_\$]{2,4})\s*=\s*(?:1|0x1|01)\s*;\s*if\s*\(\s*\1\s*\)/g, '$1 = 0; if (false)');
+        jsCode = jsCode.replace(
+            new RegExp('[=]\\s*(' + sentinelAlt + ')\\s*;', 'g'),
+            '= 0;'
+        );
+        console.log('[OK] State-machine sentinels zeroed');
 
-        // Hardcoded flag patches
-        const acFlag1 = '\u2c9f\u030b\ufe04';
-        const acRegex1 = new RegExp(acFlag1 + '\\s*=\\s*(?!=)([^;(),\\s]+)', 'g');
-        jsCode = jsCode.replace(acRegex1, acFlag1 + ' = 0');
+        jsCode = jsCode.replace(
+            /=\s*(\([^;]{5,400}?\))\s*\?\s*(?:0[xX]?1|01|1)\s*:\s*(?:0[xX]?0|0x0|00|0)\s*;/g,
+            '= 0;'
+        );
 
-        const acFlag2 = '\u0440\u0789\u034f';
-        const acRegex2 = new RegExp(acFlag2 + '\\s*=\\s*(?!=)([^;(),\\s]+)', 'g');
-        jsCode = jsCode.replace(acRegex2, acFlag2 + ' = 0');
+        jsCode = jsCode.replace(
+            /=\s*(\([^;]{5,400}?\))\s*\?\s*(?:0[xX]?0|0x0|00|0)\s*:\s*(?:0[xX]?1|01|1)\s*;/g,
+            '= 0;'
+        );
+        console.log('[OK] Flag-variable assignments zeroed');
 
-        const protoBypass = `
+        const definePropertyShield = `
 (function() {
-    var _acProps = [
-        '\u0455\u1687\u10c3',
-        '\u2c9f\u030b\ufe04',
-        '\u0440\u0789\u034f',
-    ];
-    _acProps.forEach(function(prop) {
-        try {
-            Object.defineProperty(Object.prototype, prop, {
-                get: function() { return 0; },
-                set: function(val) {},
-                configurable: true,
-                enumerable: false
-            });
-        } catch(e) {}
-    });
+    var _origDefProp = Object.defineProperty;
+    Object.defineProperty = function(target, prop, descriptor) {
+        if (target === Object.prototype) {
+            try {
+                var safeDesc = Object.assign({}, descriptor, {
+                    configurable: true,
+                    enumerable:   false
+                });
+                return _origDefProp.call(this, target, prop, safeDesc);
+            } catch(e) { return target; }
+        }
+        return _origDefProp.apply(this, arguments);
+    };
 })();
 `;
-        jsCode = protoBypass + '\n' + jsCode;
+        jsCode = definePropertyShield + '\n' + jsCode;
+        console.log('[OK] Object.prototype defineProperty shield prepended');
 
-        const escF1 = acFlag1.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const escF2 = acFlag2.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const jumpKillRegex = new RegExp(
-            '(' + escF1 + '|' + escF2 + ')' +
-            '\\s*=\\s*(?:0[xX]?1|01|1)(?![\\da-fA-F])\\s*;' +
-            '([^;]{0,80}?)' +
-            '(999|0[xX]3[eE]7|01747)',
-            'g'
-        );
-        jsCode = jsCode.replace(jumpKillRegex, (_, flagPart, middle, jump) => {
-            return flagPart + ' = 0;' + middle + jump;
-        });
-
-        // WebAssembly Bypass with added dynamic environment check to neutralize scrambled callbacks
         const wasmBypass = `
 (function() {
     var _origInstantiate = WebAssembly.instantiate;
     var _origInstantiateStreaming = WebAssembly.instantiateStreaming;
     WebAssembly.instantiate = function(buf, imports) {
-        if (imports && imports.env) {
-            // Dynamically block execution of common telemetry/kill callbacks in case of scramble
-            ['report', 'die', 'check', 'validate', 'kill'].forEach(function(key) {
-                if (imports.env[key]) {
-                    imports.env[key] = function() {
-                        console.warn("Blocked anti-cheat trigger: " + key);
-                    };
-                }
-            });
-        }
         return _origInstantiate(buf, imports);
     };
     WebAssembly.instantiateStreaming = function(src, imports) {
@@ -127,17 +115,17 @@ async function runUpdater() {
         const uiRemoverBootloader = `
 (function() {
     var targets = [
-        'terms', 'howtoplay', 'changelog', 'featuredVideo', 
+        'terms', 'howtoplay', 'changelog', 'featuredVideo',
         'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'
     ];
-    
+
     var origGet = document.getElementById;
     document.getElementById = function(id) {
         var el = origGet.call(document, id);
         if (!el && targets.indexOf(id) !== -1) {
             el = document.createElement('div');
             el.id = id;
-            el.style.display = 'none'; 
+            el.style.display = 'none';
         }
         return el;
     };
@@ -145,7 +133,7 @@ async function runUpdater() {
     var style = document.createElement('style');
     style.innerHTML = '#' + targets.join(', #') + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
     style.innerHTML += ' .bebebaba { display: none !important; }';
-    
+
     if (document.head) document.head.appendChild(style);
     else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
 
@@ -157,7 +145,7 @@ async function runUpdater() {
 
             if (isMainMenu) {
                 var dx = undefined;
-                
+
                 if (arguments.length === 3 || arguments.length === 5) dx = arguments[1];
                 else if (arguments.length === 9) dx = arguments[5];
 
@@ -168,27 +156,27 @@ async function runUpdater() {
                     if (isUI) {
                         var absX = dx * transform.a + transform.e;
                         var canvasCenter = this.canvas.width / 2;
-                        
                         var relX = (absX - canvasCenter) / transform.a;
-
                         if (relX < -440 || relX > 300) {
-                            return; 
+                            return;
                         }
                     }
                 }
             }
         } catch (err) {}
-        
+
         return origDrawImage.apply(this, arguments);
     };
 })();
+
 `;
         jsCode = uiRemoverBootloader + '\n' + jsCode;
+        console.log('[OK] UI remover prepended');
 
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
             const base64Script = Buffer.from(myCustomScript).toString('base64');
-            
+
             const injectionCode = `
 setTimeout(function() {
     try {
@@ -204,12 +192,12 @@ setTimeout(function() {
             jsCode += '\n;\n' + injectionCode;
             console.log('[INJ] omrxware.js injected');
         } catch (err) {
-            console.error("Could not find omrxware.js.");
+            console.error('Could not find omrxware.js.');
             process.exit(1);
         }
 
         fs.writeFileSync('devast-modded.js', jsCode);
-        console.log("\n✓ Successfully generated devast-modded.js");
+        console.log('\n✓ Successfully generated devast-modded.js');
 
     } catch (error) {
         console.error(error);
