@@ -19,6 +19,22 @@ async function runUpdater() {
 
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
 
+        // Bypass the anti-cheat verification flag (ⲟ̋︄)
+        const flagVar = '\u2c9f\u030b\ufe04';
+        const anticheatRegex = new RegExp(flagVar + '\\s*=\\s*(?!=)([^;(),\\s]+)', 'g');
+        jsCode = jsCode.replace(anticheatRegex, flagVar + ' = 0');
+
+        // Bypass the tamper score (ѕᚇᄇ) on player/object prototype
+        const tamperBypass = `
+Object.defineProperty(Object.prototype, '\\u0455\\u1687\\u10c3', {
+    get: function() { return 0; },
+    set: function(val) {},
+    configurable: true
+});
+`;
+        jsCode = tamperBypass + '\n' + jsCode;
+
+
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
             
