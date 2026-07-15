@@ -1,3 +1,4 @@
+
 const fs = require('fs');
 
 async function runUpdater() {
@@ -12,6 +13,7 @@ async function runUpdater() {
         let jsUrl = scriptMatch[1];
         if (!jsUrl.startsWith('http')) jsUrl = 'https://devast.io/' + jsUrl.replace(/^\//, '');
 
+        console.log(`Downloading ${jsUrl}`);
         const jsResponse = await fetch(jsUrl);
         let jsCode = await jsResponse.text();
 
@@ -21,22 +23,18 @@ async function runUpdater() {
 
         const acFlag1 = '\u2c9f\u030b\ufe04';
         const acRegex1 = new RegExp(acFlag1 + '\\s*=\\s*(?!=)([^;(),\\s]+)', 'g');
-        const before1 = (jsCode.match(acRegex1) || []).length;
         jsCode = jsCode.replace(acRegex1, acFlag1 + ' = 0');
-        console.log(`[AC#1] Patched ${before1} assignments of ⲟ̋︄ → 0`);
 
         const acFlag2 = '\u0440\u0789\u034f';
         const acRegex2 = new RegExp(acFlag2 + '\\s*=\\s*(?!=)([^;(),\\s]+)', 'g');
-        const before2 = (jsCode.match(acRegex2) || []).length;
         jsCode = jsCode.replace(acRegex2, acFlag2 + ' = 0');
-        console.log(`[AC#2] Patched ${before2} assignments of рမ͏ → 0`);
 
         const protoBypass = `
 (function() {
     var _acProps = [
-        '\u0455\u1687\u10c3',  
-        '\u2c9f\u030b\ufe04',  
-        '\u0440\u0789\u034f',  
+        '\u0455\u1687\u10c3',
+        '\u2c9f\u030b\ufe04',
+        '\u0440\u0789\u034f',
     ];
     _acProps.forEach(function(prop) {
         try {
@@ -51,7 +49,6 @@ async function runUpdater() {
 })();
 `;
         jsCode = protoBypass + '\n' + jsCode;
-        console.log('[AC#3] Injected Object.prototype AC property traps');
 
         const escF1 = acFlag1.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const escF2 = acFlag2.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -62,13 +59,9 @@ async function runUpdater() {
             '(999|0[xX]3[eE]7|01747)',
             'g'
         );
-        const before4 = (jsCode.match(jumpKillRegex) || []).length;
         jsCode = jsCode.replace(jumpKillRegex, (_, flagPart, middle, jump) => {
             return flagPart + ' = 0;' + middle + jump;
         });
-        console.log(`[AC#4] Neutralised ${before4} flag+jump combined patterns`);
-
-        console.log('a');
 
         const wasmBypass = `
 (function() {
@@ -83,20 +76,16 @@ async function runUpdater() {
 })();
 `;
         jsCode = wasmBypass + '\n' + jsCode;
-        console.log('[AC#6] Injected WebAssembly integrity bypass stub');
 
         const timingBypass = `
 (function() {
     var _perfNow = performance.now.bind(performance);
     var _dateNow = Date.now.bind(Date);
-    var _startReal = _perfNow();
-    var _startVirt = _startReal;
     performance.now = function() { return _perfNow(); };
     Date.now = function() { return _dateNow(); };
 })();
 `;
         jsCode = timingBypass + '\n' + jsCode;
-        console.log('fd');
 
         const canvasBypass = `
 (function() {
@@ -111,11 +100,71 @@ async function runUpdater() {
 })();
 `;
         jsCode = canvasBypass + '\n' + jsCode;
-        console.log('jhg');
+
+        const uiRemoverBootloader = `
+(function() {
+    var targets = [
+        'terms', 'howtoplay', 'changelog', 'featuredVideo', 
+        'bebebaba', 'devast-io_970x250', 'preroll', 'exapush-popup'
+    ];
+    
+    var origGet = document.getElementById;
+    document.getElementById = function(id) {
+        var el = origGet.call(document, id);
+        if (!el && targets.indexOf(id) !== -1) {
+            el = document.createElement('div');
+            el.id = id;
+            el.style.display = 'none'; 
+        }
+        return el;
+    };
+
+    var style = document.createElement('style');
+    style.innerHTML = '#' + targets.join(', #') + ' { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; width: 0 !important; height: 0 !important; }';
+    style.innerHTML += ' .bebebaba { display: none !important; }';
+    
+    if (document.head) document.head.appendChild(style);
+    else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
+
+    const origDrawImage = CanvasRenderingContext2D.prototype.drawImage;
+    CanvasRenderingContext2D.prototype.drawImage = function() {
+        try {
+            var nickInput = document.getElementById('nicknameInput');
+            var isMainMenu = nickInput && nickInput.offsetParent !== null;
+
+            if (isMainMenu) {
+                var dx = undefined;
+                
+                if (arguments.length === 3 || arguments.length === 5) dx = arguments[1];
+                else if (arguments.length === 9) dx = arguments[5];
+
+                if (dx !== undefined) {
+                    var transform = this.getTransform();
+                    var isUI = Math.abs(transform.a - 1) < 0.05 || Math.abs(transform.a - window.devicePixelRatio) < 0.05;
+
+                    if (isUI) {
+                        var absX = dx * transform.a + transform.e;
+                        var canvasCenter = this.canvas.width / 2;
+                        
+                        var relX = (absX - canvasCenter) / transform.a;
+
+                        if (relX < -440 || relX > 300) {
+                            return; 
+                        }
+                    }
+                }
+            }
+        } catch (err) {}
+        
+        return origDrawImage.apply(this, arguments);
+    };
+})();
+
+`;
+        jsCode = uiRemoverBootloader + '\n' + jsCode;
 
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
-            
             const base64Script = Buffer.from(myCustomScript).toString('base64');
             
             const injectionCode = `
@@ -128,12 +177,13 @@ setTimeout(function() {
     } catch (e) {
         console.error("Injection error:", e);
     }
-}, 1000); 
+}, 1000);
 `;
-            jsCode = jsCode + '\n\n;\n' + injectionCode;
+            jsCode += '\n;\n' + injectionCode;
             console.log('[INJ] omrxware.js injected');
         } catch (err) {
-            console.error("Could not find omrxware.js.");
+            console.error("Could not find omrxware.js. Place the final script in the same folder.");
+            process.exit(1);
         }
 
         fs.writeFileSync('devast-modded.js', jsCode);
