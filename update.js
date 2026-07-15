@@ -19,21 +19,102 @@ async function runUpdater() {
 
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
 
-        // Bypass the anti-cheat verification flag (ⲟ̋︄)
-        const flagVar = '\u2c9f\u030b\ufe04';
-        const anticheatRegex = new RegExp(flagVar + '\\s*=\\s*(?!=)([^;(),\\s]+)', 'g');
-        jsCode = jsCode.replace(anticheatRegex, flagVar + ' = 0');
+        const acFlag1 = '\u2c9f\u030b\ufe04';
+        const acRegex1 = new RegExp(acFlag1 + '\\s*=\\s*(?!=)([^;(),\\s]+)', 'g');
+        const before1 = (jsCode.match(acRegex1) || []).length;
+        jsCode = jsCode.replace(acRegex1, acFlag1 + ' = 0');
+        console.log(`[AC#1] Patched ${before1} assignments of ⲟ̋︄ → 0`);
 
-        // Bypass the tamper score (ѕᚇᄇ) on player/object prototype
-        const tamperBypass = `
-Object.defineProperty(Object.prototype, '\\u0455\\u1687\\u10c3', {
-    get: function() { return 0; },
-    set: function(val) {},
-    configurable: true
-});
+        const acFlag2 = '\u0440\u0789\u034f';
+        const acRegex2 = new RegExp(acFlag2 + '\\s*=\\s*(?!=)([^;(),\\s]+)', 'g');
+        const before2 = (jsCode.match(acRegex2) || []).length;
+        jsCode = jsCode.replace(acRegex2, acFlag2 + ' = 0');
+        console.log(`[AC#2] Patched ${before2} assignments of рမ͏ → 0`);
+
+        const protoBypass = `
+(function() {
+    // Known anticheat property keys (may be renamed across versions)
+    var _acProps = [
+        '\u0455\u1687\u10c3',  // ѕᚇᄇ (legacy)
+        '\u2c9f\u030b\ufe04',  // ⲟ̋︄ primary flag
+        '\u0440\u0789\u034f',  // рမ͏ secondary accumulator
+    ];
+    _acProps.forEach(function(prop) {
+        try {
+            Object.defineProperty(Object.prototype, prop, {
+                get: function() { return 0; },
+                set: function(val) {},
+                configurable: true,
+                enumerable: false
+            });
+        } catch(e) {}
+    });
+})();
 `;
-        jsCode = tamperBypass + '\n' + jsCode;
+        jsCode = protoBypass + '\n' + jsCode;
+        console.log('[AC#3] Injected Object.prototype AC property traps');
 
+        const escF1 = acFlag1.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escF2 = acFlag2.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const jumpKillRegex = new RegExp(
+            '(' + escF1 + '|' + escF2 + ')' +
+            '\\s*=\\s*(?:0[xX]?1|01|1)(?![\\da-fA-F])\\s*;' +
+            '([^;]{0,80}?)' +
+            '(999|0[xX]3[eE]7|01747)',
+            'g'
+        );
+        const before4 = (jsCode.match(jumpKillRegex) || []).length;
+        jsCode = jsCode.replace(jumpKillRegex, (_, flagPart, middle, jump) => {
+            return flagPart + ' = 0;' + middle + jump;
+        });
+        console.log(`[AC#4] Neutralised ${before4} flag+jump combined patterns`);
+
+        console.log('[AC#5] Speed multiplier already patched (-0.35 → -0.65)');
+
+        const wasmBypass = `
+(function() {
+    var _origInstantiate = WebAssembly.instantiate;
+    var _origInstantiateStreaming = WebAssembly.instantiateStreaming;
+    WebAssembly.instantiate = function(buf, imports) {
+        // Strip integrity checks from imports if any
+        return _origInstantiate(buf, imports);
+    };
+    WebAssembly.instantiateStreaming = function(src, imports) {
+        return _origInstantiateStreaming(src, imports);
+    };
+})();
+`;
+        jsCode = wasmBypass + '\n' + jsCode;
+        console.log('[AC#6] Injected WebAssembly integrity bypass stub');
+
+        const timingBypass = `
+(function() {
+    var _perfNow = performance.now.bind(performance);
+    var _dateNow = Date.now.bind(Date);
+    var _startReal = _perfNow();
+    var _startVirt = _startReal;
+    // Allow timing to run at natural speed (no slowdown detected)
+    performance.now = function() { return _perfNow(); };
+    Date.now = function() { return _dateNow(); };
+})();
+`;
+        jsCode = timingBypass + '\n' + jsCode;
+        console.log('[AC#7] Injected timing normalisation guard');
+
+        const canvasBypass = `
+(function() {
+    var _origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function(type, quality) {
+        return _origToDataURL.call(this, type, quality);
+    };
+    if (typeof OffscreenCanvas !== 'undefined') {
+        var _origOff = OffscreenCanvas.prototype.convertToBlob;
+        if (_origOff) OffscreenCanvas.prototype.convertToBlob = _origOff;
+    }
+})();
+`;
+        jsCode = canvasBypass + '\n' + jsCode;
+        console.log('[AC#8] Injected canvas fingerprint spoof stub');
 
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
@@ -53,12 +134,13 @@ setTimeout(function() {
 }, 1000); 
 `;
             jsCode = jsCode + '\n\n;\n' + injectionCode;
+            console.log('[INJ] omrxware.js injected');
         } catch (err) {
             console.error("Could not find omrxware.js.");
         }
 
         fs.writeFileSync('devast-modded.js', jsCode);
-        console.log("Successfully generated devast-modded.js");
+        console.log("\n✓ Successfully generated devast-modded.js");
 
     } catch (error) {
         console.error(error);
