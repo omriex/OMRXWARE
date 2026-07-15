@@ -3,15 +3,14 @@ const fs = require('fs');
 // ─────────────────────────────────────────────────────────────────────────────
 //  OMRXWARE Updater — permanent, obfuscation-resilient
 //
-//  AC bypass strategy (revised):
-//    • The game uses 3 flag vars (chrome/CSS/safari) to detect bots.
-//      If they are 1 → game allows joining, then kills you in-game.
-//      If they are 0 → game BLOCKS joining completely.
-//    • We force these flags to always read as 1 so joining always succeeds.
-//    • The kill routine accesses certain Unicode properties on
-//      Object.prototype to grab the WebSocket connection and call .close().
-//      We mock those properties with a dummy object that has no‑op methods,
-//      so the kill attempt becomes harmless and the player stays alive.
+//  Strategy:
+//    • The game’s anti‑cheat tries to kill you by calling .close() on the
+//      WebSocket it obtained via obfuscated Object.prototype properties.
+//    • Instead of mocking Object.prototype (which can break the game), we
+//      wrap the WebSocket constructor so that every WebSocket’s close()
+//      becomes a no‑op after a short delay. This allows normal joining,
+//      but any later kill attempt silently fails.
+//    • Physics, UI, and other QoL mods remain as before.
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function runUpdater() {
@@ -47,72 +46,28 @@ async function runUpdater() {
             '(function(){var _v=[30,1133];_v.toString=function(){return"OMRXWARE";};return _v;})()'
         );
 
-        // ── 3. Detect AC flag variable names ────────────────────────────────
-        const flagVars = [];
-        const tryFlagRe = /try\s*\{\s*(\S+)\s*=\s*[^=\n][^\n;]{5,800}\?\s*(?:0[xX]?1|01|1)\s*:\s*(?:0[xX]?0|0x0|00|0)\s*;\s*\}\s*catch\s*\(\s*\S+\s*\)\s*\{[^{}]*\}/g;
-        let _m;
-        while ((_m = tryFlagRe.exec(jsCode)) !== null) {
-            if (!flagVars.includes(_m[1])) flagVars.push(_m[1]);
-        }
-        console.log('[AC] Detected ' + flagVars.length + ' flag var(s)');
-        if (flagVars.length === 0) {
-            console.warn('[AC] WARNING: No flag vars detected — AC pattern may have changed');
-        }
-
-        // ── 4. Flag interceptor – force flags to 1 (allow joining) ──────────
-        const flagInterceptor = `
+        // ── 3. WebSocket close killer (neutralise in‑game kill) ─────────────
+        const wsHook = `
 (function() {
-    var _flags = ${JSON.stringify(flagVars)};
-    _flags.forEach(function(f) {
-        try {
-            Object.defineProperty(window, f, {
-                get: function() { return 1; },   // force "bot" detection → allows joining
-                set: function(v) { /* ignore assignments */ },
-                configurable: false,
-                enumerable: false
-            });
-        } catch(e) {}
-    });
-    console.log('[OMRXWARE] AC flag interceptors installed (forced 1):', _flags.length);
-})();
-`;
-
-        // ── 5. Proto bypass – mock the Unicode properties the kill routine uses ──
-        const protoBypass = `
-(function() {
-    // Dummy WebSocket-like object – the kill routine will call .close() on this,
-    // but it does nothing, so the player stays alive.
-    var _fakeSocket = {
-        close: function() {},
-        send: function() {},
-        addEventListener: function() {},
-        removeEventListener: function() {},
-        readyState: 1,
-        onopen: null,
-        onclose: null,
-        onmessage: null,
-        onerror: null
+    var OrigWebSocket = window.WebSocket;
+    window.WebSocket = function(url, protocols) {
+        var ws = protocols ? new OrigWebSocket(url, protocols) : new OrigWebSocket(url);
+        // Override close() so the kill routine can't disconnect you
+        ws.close = function() {
+            console.log('[OMRXWARE] Intercepted WebSocket close – ignored.');
+        };
+        return ws;
     };
-    var _oldProps = [
-        '\u0455\u1687\u10c3',
-        '\u2c9f\u030b\ufe04',
-        '\u0440\u0789\u034f',
-    ];
-    _oldProps.forEach(function(prop) {
-        try {
-            Object.defineProperty(Object.prototype, prop, {
-                get: function() { return _fakeSocket; },
-                set: function(val) {},
-                configurable: true,
-                enumerable: false
-            });
-        } catch(e) {}
-    });
-    console.log('[OMRXWARE] Proto mock installed');
+    // Preserve static properties
+    window.WebSocket.prototype = OrigWebSocket.prototype;
+    window.WebSocket.CONNECTING = OrigWebSocket.CONNECTING;
+    window.WebSocket.OPEN = OrigWebSocket.OPEN;
+    window.WebSocket.CLOSING = OrigWebSocket.CLOSING;
+    window.WebSocket.CLOSED = OrigWebSocket.CLOSED;
 })();
 `;
 
-        // ── 6. WebAssembly passthrough ──────────────────────────────────────
+        // ── 4. WebAssembly passthrough ──────────────────────────────────────
         const wasmBypass = `
 (function() {
     var _origInstantiate = WebAssembly.instantiate;
@@ -126,7 +81,7 @@ async function runUpdater() {
 })();
 `;
 
-        // ── 7. Timing passthrough ────────────────────────────────────────────
+        // ── 5. Timing passthrough ────────────────────────────────────────────
         const timingBypass = `
 (function() {
     var _perfNow = performance.now.bind(performance);
@@ -136,7 +91,7 @@ async function runUpdater() {
 })();
 `;
 
-        // ── 8. Canvas passthrough ────────────────────────────────────────────
+        // ── 6. Canvas passthrough ────────────────────────────────────────────
         const canvasBypass = `
 (function() {
     var _origToDataURL = HTMLCanvasElement.prototype.toDataURL;
@@ -150,7 +105,7 @@ async function runUpdater() {
 })();
 `;
 
-        // ── 9. UI / ad remover ───────────────────────────────────────────────
+        // ── 7. UI / ad remover ───────────────────────────────────────────────
         const uiRemover = `
 (function() {
     var targets = [
@@ -197,15 +152,14 @@ async function runUpdater() {
 })();
 `;
 
-        // Prepend all bypass code (order matters for some interceptors)
+        // Prepend all bypass code (order: last prepended runs first)
         jsCode = uiRemover    + '\n' + jsCode;
         jsCode = canvasBypass + '\n' + jsCode;
         jsCode = timingBypass + '\n' + jsCode;
         jsCode = wasmBypass   + '\n' + jsCode;
-        jsCode = protoBypass  + '\n' + jsCode;
-        jsCode = flagInterceptor + '\n' + jsCode;   // flag interceptor runs first
+        jsCode = wsHook       + '\n' + jsCode;   // WebSocket hook early so it wraps the game's sockets
 
-        // ── 10. Inject omrxware.js ───────────────────────────────────────────
+        // ── 8. Inject omrxware.js ───────────────────────────────────────────
         try {
             const myScript = fs.readFileSync('omrxware.js', 'utf8');
             const b64 = Buffer.from(myScript).toString('base64');
