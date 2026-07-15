@@ -1,4 +1,3 @@
-
 const fs = require('fs');
 
 async function runUpdater() {
@@ -19,13 +18,21 @@ async function runUpdater() {
 
         fs.writeFileSync('devast-original.js', jsCode);
 
+        // Physics modifier
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
 
+        // Signature patch
         jsCode = jsCode.replace(
             /(\[\s*\d+\s*,\s*0[0-7]+\s*\]|\[\s*\d+\s*,\s*\d+\s*\])(?=\s*;[^}]{0,300}catch)/,
             `(function(){var _v=[30,1133];_v.toString=function(){return"OMRXWARE";};return _v;})()`
         );
 
+        // --- NEW: DYNAMIC FALLBACK PATTERN ---
+        // This targets the structure "flag = 1; if(flag)" or similar patterns dynamically
+        // if the hardcoded Unicode variables change or scramble during updates.
+        jsCode = jsCode.replace(/([a-zA-Z0-9_\$]{2,4})\s*=\s*(?:1|0x1|01)\s*;\s*if\s*\(\s*\1\s*\)/g, '$1 = 0; if (false)');
+
+        // Hardcoded flag patches
         const acFlag1 = '\u2c9f\u030b\ufe04';
         const acRegex1 = new RegExp(acFlag1 + '\\s*=\\s*(?!=)([^;(),\\s]+)', 'g');
         jsCode = jsCode.replace(acRegex1, acFlag1 + ' = 0');
@@ -68,11 +75,22 @@ async function runUpdater() {
             return flagPart + ' = 0;' + middle + jump;
         });
 
+        // WebAssembly Bypass with added dynamic environment check to neutralize scrambled callbacks
         const wasmBypass = `
 (function() {
     var _origInstantiate = WebAssembly.instantiate;
     var _origInstantiateStreaming = WebAssembly.instantiateStreaming;
     WebAssembly.instantiate = function(buf, imports) {
+        if (imports && imports.env) {
+            // Dynamically block execution of common telemetry/kill callbacks in case of scramble
+            ['report', 'die', 'check', 'validate', 'kill'].forEach(function(key) {
+                if (imports.env[key]) {
+                    imports.env[key] = function() {
+                        console.warn("Blocked anti-cheat trigger: " + key);
+                    };
+                }
+            });
+        }
         return _origInstantiate(buf, imports);
     };
     WebAssembly.instantiateStreaming = function(src, imports) {
@@ -164,7 +182,6 @@ async function runUpdater() {
         return origDrawImage.apply(this, arguments);
     };
 })();
-
 `;
         jsCode = uiRemoverBootloader + '\n' + jsCode;
 
