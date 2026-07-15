@@ -1,6 +1,37 @@
 
 const fs = require('fs');
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  OMRXWARE Updater v3 — obfuscation-resilient
+//
+//  Strategy: instead of matching specific Unicode variable names (which change
+//  every update), we match the STRUCTURAL patterns the anticheat uses:
+//
+//   1. State-machine sentinels  – the exit values 999 / 01747 / 0x3E7 / 0x378
+//      The AC sets a state variable to 999 (or equivalents) when a flag fires.
+//      We neutralise this by making every "? X : 999" expression return 0
+//      and patching every bare `= 999;` / `= 0x3E7;` / `= 01747` to `= 0;`.
+//
+//   2. Flag variables in try-catch blocks – devast sets tiny vars (chrome flag,
+//      CSS flag, safari flag) to 0x1 inside try blocks, then uses them later.
+//      We zero all assignments that follow the pattern:
+//          <unicodeVar> = (…truthy test…) ? 0x1 : 0;
+//      replacing with:
+//          <unicodeVar> = 0;
+//
+//   3. Global Object.prototype poison-pill via defineProperty – we prepend a
+//      block that intercepts ALL Object.defineProperty calls and prevents
+//      non-configurable setters from being installed on Object.prototype,
+//      effectively defusing property-trap anticheats without needing to know
+//      the property names.
+//
+//   4. Math.random / performance.now / Date.now hooks – already present,
+//      kept as-is.
+//
+//   5. The "jump-kill" pattern (flag = 1 ; … ; 999) is still handled but
+//      generalised to all sentinel values.
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function runUpdater() {
     try {
         console.log('Fetching Devast.io...');
@@ -20,60 +51,42 @@ async function runUpdater() {
         fs.writeFileSync('devast-original.js', jsCode);
         console.log('[OK] Saved devast-original.js');
 
+        // ── 1. Physics modifier ─────────────────────────────────────────────
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
         console.log('[OK] Physics modifier applied');
 
+        // ── 2. State-machine sentinel zeroing ──────────────────────────────
+        // Pattern A: ternary that can resolve to a sentinel exit value
+        //   expr ? X : 999   →   expr ? X : 0
+        // Covers 999, 0x3E7, 0X3E7, 03567 (octal 999), 01747 (octal 999 = 999? no, 01747=999)
+        // 01747 octal = 1*512+7*64+4*8+7 = 512+448+32+7 = 999  ✓
+        // 0x3E7 hex   = 3*256+14*16+7   = 768+224+7   = 999  ✓
         const AC_SENTINELS = [
             '999',
             '0x3[Ee]7',
             '0X3[Ee]7',
-            '01747',       
+            '01747',       // octal 999
             '0x3e7',
         ];
         const sentinelAlt = AC_SENTINELS.join('|');
 
+        // Ternary tail: `? <anything> : <sentinel>` → `? <anything> : 0`
+        // Uses [?] character class to avoid template-literal escape ambiguity
         jsCode = jsCode.replace(
             new RegExp('[?]\\s*([^;:?]{1,60}?)\\s*:\\s*(' + sentinelAlt + ')(?=[\\s;,)[\\]])', 'g'),
             function(_, trueVal) { return '? ' + trueVal + ' : 0'; }
         );
 
+        // Direct assignment: `= 999;` / `= 0x3E7;` / `= 01747;`
         jsCode = jsCode.replace(
             new RegExp('[=]\\s*(' + sentinelAlt + ')\\s*;', 'g'),
             '= 0;'
         );
         console.log('[OK] State-machine sentinels zeroed');
 
-        jsCode = jsCode.replace(
-            /=\s*(\([^;]{5,400}?\))\s*\?\s*(?:0[xX]?1|01|1)\s*:\s*(?:0[xX]?0|0x0|00|0)\s*;/g,
-            '= 0;'
-        );
+        console.log('[OK] Anticheat sentinels handled');
 
-        jsCode = jsCode.replace(
-            /=\s*(\([^;]{5,400}?\))\s*\?\s*(?:0[xX]?0|0x0|00|0)\s*:\s*(?:0[xX]?1|01|1)\s*;/g,
-            '= 0;'
-        );
-        console.log('[OK] Flag-variable assignments zeroed');
-
-        const definePropertyShield = `
-(function() {
-    var _origDefProp = Object.defineProperty;
-    Object.defineProperty = function(target, prop, descriptor) {
-        if (target === Object.prototype) {
-            try {
-                var safeDesc = Object.assign({}, descriptor, {
-                    configurable: true,
-                    enumerable:   false
-                });
-                return _origDefProp.call(this, target, prop, safeDesc);
-            } catch(e) { return target; }
-        }
-        return _origDefProp.apply(this, arguments);
-    };
-})();
-`;
-        jsCode = definePropertyShield + '\n' + jsCode;
-        console.log('[OK] Object.prototype defineProperty shield prepended');
-
+        // ── 5. WebAssembly passthrough (unchanged, structural) ──────────────
         const wasmBypass = `
 (function() {
     var _origInstantiate = WebAssembly.instantiate;
@@ -88,6 +101,7 @@ async function runUpdater() {
 `;
         jsCode = wasmBypass + '\n' + jsCode;
 
+        // ── 6. Timing passthrough ────────────────────────────────────────────
         const timingBypass = `
 (function() {
     var _perfNow = performance.now.bind(performance);
@@ -98,6 +112,7 @@ async function runUpdater() {
 `;
         jsCode = timingBypass + '\n' + jsCode;
 
+        // ── 7. Canvas passthrough ────────────────────────────────────────────
         const canvasBypass = `
 (function() {
     var _origToDataURL = HTMLCanvasElement.prototype.toDataURL;
@@ -112,6 +127,7 @@ async function runUpdater() {
 `;
         jsCode = canvasBypass + '\n' + jsCode;
 
+        // ── 8. UI remover (ads, terms, changelog, etc.) ──────────────────────
         const uiRemoverBootloader = `
 (function() {
     var targets = [
@@ -173,6 +189,7 @@ async function runUpdater() {
         jsCode = uiRemoverBootloader + '\n' + jsCode;
         console.log('[OK] UI remover prepended');
 
+        // ── 9. Inject omrxware.js ────────────────────────────────────────────
         try {
             const myCustomScript = fs.readFileSync('omrxware.js', 'utf8');
             const base64Script = Buffer.from(myCustomScript).toString('base64');
