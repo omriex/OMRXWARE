@@ -1,16 +1,13 @@
-
 const fs = require('fs');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  OMRXWARE Updater — permanent, obfuscation-resilient
 //
-//  AC bypass strategy (revised):
+//  AC bypass strategy:
 //    Devast sets 3 flag vars (chrome/CSS/safari detection) in the outer JS,
 //    then the INNER eval'd game reads them:
 //      • if flags = 1  → game allows joining, then kills you in-game
 //      • if flags = 0  → game BLOCKS joining (WebSocket never opens)
-//
-//    Old approach (blanking try-catch) forced flags = 0 → can't join.
 //
 //    Correct approach:
 //      1. Detect the 3 flag var names structurally (no hardcoding)
@@ -62,9 +59,6 @@ async function runUpdater() {
         //       <flagVar> = (<probe>) ? 1 : 0;
         //   } catch (<x>) {}
         //
-        // We detect them by matching the assignment pattern inside the try block.
-        // The variable names change every update — we never hardcode them.
-        //
         const flagVars = [];
         const tryFlagRe = /try\s*\{\s*(\S+)\s*=\s*[^=\n][^\n;]{5,800}\?\s*(?:0[xX]?1|01|1)\s*:\s*(?:0[xX]?0|0x0|00|0)\s*;\s*\}\s*catch\s*\(\s*\S+\s*\)\s*\{[^{}]*\}/g;
         let _m;
@@ -100,28 +94,9 @@ async function runUpdater() {
 })();
 `;
 
-        // ── 5. Proto bypass (defense-in-depth for property-access AC) ────────
-        const protoBypass = `
-(function() {
-    var _oldProps = [
-        '\u0455\u1687\u10c3',
-        '\u2c9f\u030b\ufe04',
-        '\u0440\u0789\u034f',
-    ];
-    _oldProps.forEach(function(prop) {
-        try {
-            Object.defineProperty(Object.prototype, prop, {
-                get: function() { return 0; },
-                set: function(val) {},
-                configurable: true,
-                enumerable: false
-            });
-        } catch(e) {}
-    });
-})();
-`;
+        // (Proto bypass removed – it was crashing the game by returning 0 instead of objects)
 
-        // ── 6. WebAssembly passthrough ──────────────────────────────────────
+        // ── 5. WebAssembly passthrough ──────────────────────────────────────
         const wasmBypass = `
 (function() {
     var _origInstantiate = WebAssembly.instantiate;
@@ -135,7 +110,7 @@ async function runUpdater() {
 })();
 `;
 
-        // ── 7. Timing passthrough ────────────────────────────────────────────
+        // ── 6. Timing passthrough ────────────────────────────────────────────
         const timingBypass = `
 (function() {
     var _perfNow = performance.now.bind(performance);
@@ -145,7 +120,7 @@ async function runUpdater() {
 })();
 `;
 
-        // ── 8. Canvas passthrough ────────────────────────────────────────────
+        // ── 7. Canvas passthrough ────────────────────────────────────────────
         const canvasBypass = `
 (function() {
     var _origToDataURL = HTMLCanvasElement.prototype.toDataURL;
@@ -159,7 +134,7 @@ async function runUpdater() {
 })();
 `;
 
-        // ── 9. UI / ad remover ───────────────────────────────────────────────
+        // ── 8. UI / ad remover ───────────────────────────────────────────────
         const uiRemover = `
 (function() {
     var targets = [
@@ -211,11 +186,10 @@ async function runUpdater() {
         jsCode = canvasBypass + '\n' + jsCode;
         jsCode = timingBypass + '\n' + jsCode;
         jsCode = wasmBypass   + '\n' + jsCode;
-        jsCode = protoBypass  + '\n' + jsCode;
         // flagInterceptor runs FIRST (before any game code) so it wins
         jsCode = flagInterceptor + '\n' + jsCode;
 
-        // ── 10. Inject omrxware.js ───────────────────────────────────────────
+        // ── 9. Inject omrxware.js ───────────────────────────────────────────
         try {
             const myScript = fs.readFileSync('omrxware.js', 'utf8');
             const b64 = Buffer.from(myScript).toString('base64');
