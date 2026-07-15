@@ -58,7 +58,6 @@
 })();
 
 
-
 (function() {
     var _origToDataURL = HTMLCanvasElement.prototype.toDataURL;
     HTMLCanvasElement.prototype.toDataURL = function(type, quality) {
@@ -83,6 +82,16 @@
     var _origInstantiate = WebAssembly.instantiate;
     var _origInstantiateStreaming = WebAssembly.instantiateStreaming;
     WebAssembly.instantiate = function(buf, imports) {
+        if (imports && imports.env) {
+            // Dynamically block execution of common telemetry/kill callbacks in case of scramble
+            ['report', 'die', 'check', 'validate', 'kill'].forEach(function(key) {
+                if (imports.env[key]) {
+                    imports.env[key] = function() {
+                        console.warn("Blocked anti-cheat trigger: " + key);
+                    };
+                }
+            });
+        }
         return _origInstantiate(buf, imports);
     };
     WebAssembly.instantiateStreaming = function(src, imports) {
