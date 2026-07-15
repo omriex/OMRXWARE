@@ -21,6 +21,11 @@ async function runUpdater() {
 
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
 
+        jsCode = jsCode.replace(
+            /(\[\s*\d+\s*,\s*0[0-7]+\s*\]|\[\s*\d+\s*,\s*\d+\s*\])(?=\s*;[^}]{0,300}catch)/,
+            `(function(){var _v=[30,1133];_v.toString=function(){return"OMRXWARE";};return _v;})()`
+        );
+
         const acFlag1 = '\u2c9f\u030b\ufe04';
         const acRegex1 = new RegExp(acFlag1 + '\\s*=\\s*(?!=)([^;(),\\s]+)', 'g');
         jsCode = jsCode.replace(acRegex1, acFlag1 + ' = 0');
@@ -182,7 +187,7 @@ setTimeout(function() {
             jsCode += '\n;\n' + injectionCode;
             console.log('[INJ] omrxware.js injected');
         } catch (err) {
-            console.error("Could not find omrxware.js. Place the final script in the same folder.");
+            console.error("Could not find omrxware.js.");
             process.exit(1);
         }
 
