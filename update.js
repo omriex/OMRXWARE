@@ -25,9 +25,6 @@ async function runUpdater() {
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
         console.log('[OK] Zoom mod (' + physCount + ' replacements)');
 
-        // FIX: Original fake array [30,1133] only had 2 elements.
-        // Game reads arbitrary indices (e.g. [7]) and got undefined, crashing.
-        // Proxy returns 0 for any out-of-bounds numeric index access.
         jsCode = jsCode.replace(
             /(\[\s*\d+\s*,\s*0[0-7]+\s*\]|\[\s*\d+\s*,\s*\d+\s*\])(?=\s*;[^}]{0,300}catch)/,
             '(function(){' +
@@ -63,7 +60,7 @@ async function runUpdater() {
         try {
             Object.defineProperty(window, f, {
                 get: function() { return 0; },
-                set: function(v) { /* silently ignore assignments */ },
+                set: function(v) { /* silently ignore */ },
                 configurable: false,
                 enumerable: false
             });
@@ -73,9 +70,6 @@ async function runUpdater() {
 })();
 `;
 
-        // FIX: Guard all WeakMap calls with typeof checks — when property access
-        // happens on a primitive (number, string), 'this' is a primitive wrapper
-        // which WeakMap rejects. Also pass through objects/functions so .close() works.
         const protoBypass = `
 (function() {
     var _oldProps = [
@@ -89,20 +83,19 @@ async function runUpdater() {
             Object.defineProperty(Object.prototype, prop, {
                 get: function() {
                     try {
-                        if (this !== null && typeof this === 'object' && _store.has(this)) {
+                        if (this != null && typeof this === 'object' && _store.has(this)) {
                             return _store.get(this);
                         }
                     } catch(e) {}
-                    return 0;
+                    return undefined;
                 },
                 set: function(val) {
                     try {
                         if (val !== null && (typeof val === 'object' || typeof val === 'function')) {
-                            if (this !== null && typeof this === 'object') {
+                            if (this != null && typeof this === 'object') {
                                 _store.set(this, val);
                             }
                         }
-                        // Silently drop primitives (AC flag pattern)
                     } catch(e) {}
                 },
                 configurable: true,
