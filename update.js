@@ -70,11 +70,28 @@ async function runUpdater() {
 })();
 `;
 
-        // protoBypass REMOVED — those Unicode Object.prototype properties are used
-        // during WebSocket connection token assembly. Intercepting them (even returning
-        // undefined) caused the token to be built with missing fields, making every
-        // server reject the connection. The flagInterceptor above covers window-level
-        // AC flags and is sufficient.
+        // The game decodes the XHR server-list response inside an eval() call.
+        // That eval'd code accesses e.g. serverEntry[7] on a value that is undefined
+        // when our patches are active, causing a throw.
+        // Fix: intercept eval and rewrite variable[N] (for N >= 3) as (variable||[])[N]
+        // so undefined[7] returns undefined gracefully instead of throwing.
+        // Only rewrite short-ish eval strings (response decoders, not the full bundle).
+        const evalPatch = `
+(function() {
+    var _origEval = window.eval;
+    window.eval = function(code) {
+        if (typeof code === 'string' && code.length < 100000) {
+            try {
+                code = code.replace(
+                    /\b([a-zA-Z_$][\w$]{0,30})\[([3-9]|[1-9]\d+)\]/g,
+                    '($1||[])[$2]'
+                );
+            } catch(e) {}
+        }
+        return _origEval.call(this, code);
+    };
+})();
+`;
 
         const wasmBypass = `
 (function() {
@@ -161,6 +178,7 @@ async function runUpdater() {
         jsCode = canvasBypass + '\n' + jsCode;
         jsCode = timingBypass + '\n' + jsCode;
         jsCode = wasmBypass   + '\n' + jsCode;
+        jsCode = evalPatch    + '\n' + jsCode;
         jsCode = flagInterceptor + '\n' + jsCode;
 
         try {
