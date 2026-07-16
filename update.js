@@ -25,6 +25,26 @@ async function runUpdater() {
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
         console.log('[OK] Zoom mod (' + physCount + ' replacements)');
 
+        // FIX: Original fake array [30,1133] only had 2 elements.
+        // Game reads arbitrary indices (e.g. [7]) and got undefined, crashing.
+        // Proxy returns 0 for any out-of-bounds numeric index access.
+        jsCode = jsCode.replace(
+            /(\[\s*\d+\s*,\s*0[0-7]+\s*\]|\[\s*\d+\s*,\s*\d+\s*\])(?=\s*;[^}]{0,300}catch)/,
+            '(function(){' +
+                'var _a=[30,1133];' +
+                'var _v=new Proxy(_a,{' +
+                    'get:function(t,p){' +
+                        'if(p==="toString")return function(){return"OMRXWARE";};' +
+                        'if(p==="length")return t.length;' +
+                        'if(typeof p==="string"&&!isNaN(p)){var i=+p;return i<t.length?t[i]:0;}' +
+                        'if(typeof p==="symbol")return t[p];' +
+                        'return t[p];' +
+                    '}' +
+                '});' +
+                'return _v;' +
+            '})()'
+        );
+
         const flagVars = [];
         const tryFlagRe = /try\s*\{\s*(\S+)\s*=\s*[^=\n][^\n;]{5,800}\?\s*(?:0[xX]?1|01|1)\s*:\s*(?:0[xX]?0|0x0|00|0)\s*;\s*\}\s*catch\s*\(\s*\S+\s*\)\s*\{[^{}]*\}/g;
         let _m;
@@ -53,9 +73,9 @@ async function runUpdater() {
 })();
 `;
 
-        // FIX: Use a WeakMap to store non-primitive values (objects, functions) so that
-        // methods like .close() remain accessible. Only silently drop primitive AC flag
-        // writes (numbers/booleans), which is what the AC checks assign.
+        // FIX: Guard all WeakMap calls with typeof checks — when property access
+        // happens on a primitive (number, string), 'this' is a primitive wrapper
+        // which WeakMap rejects. Also pass through objects/functions so .close() works.
         const protoBypass = `
 (function() {
     var _oldProps = [
@@ -68,16 +88,22 @@ async function runUpdater() {
             var _store = new WeakMap();
             Object.defineProperty(Object.prototype, prop, {
                 get: function() {
-                    if (_store.has(this)) return _store.get(this);
+                    try {
+                        if (this !== null && typeof this === 'object' && _store.has(this)) {
+                            return _store.get(this);
+                        }
+                    } catch(e) {}
                     return 0;
                 },
                 set: function(val) {
-                    // Pass through objects and functions so their methods (e.g. .close())
-                    // remain callable. Only block primitive AC flag writes (0/1/true/false).
-                    if (val !== null && (typeof val === 'object' || typeof val === 'function')) {
-                        _store.set(this, val);
-                    }
-                    // Silently drop primitive assignments (AC flag pattern)
+                    try {
+                        if (val !== null && (typeof val === 'object' || typeof val === 'function')) {
+                            if (this !== null && typeof this === 'object') {
+                                _store.set(this, val);
+                            }
+                        }
+                        // Silently drop primitives (AC flag pattern)
+                    } catch(e) {}
                 },
                 configurable: true,
                 enumerable: false
