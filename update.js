@@ -25,11 +25,6 @@ async function runUpdater() {
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
         console.log('[OK] Zoom mod (' + physCount + ' replacements)');
 
-        jsCode = jsCode.replace(
-            /(\[\s*\d+\s*,\s*0[0-7]+\s*\]|\[\s*\d+\s*,\s*\d+\s*\])(?=\s*;[^}]{0,300}catch)/,
-            '(function(){var _v=[30,1133];_v.toString=function(){return"OMRXWARE";};return _v;})()'
-        );
-
         const flagVars = [];
         const tryFlagRe = /try\s*\{\s*(\S+)\s*=\s*[^=\n][^\n;]{5,800}\?\s*(?:0[xX]?1|01|1)\s*:\s*(?:0[xX]?0|0x0|00|0)\s*;\s*\}\s*catch\s*\(\s*\S+\s*\)\s*\{[^{}]*\}/g;
         let _m;
