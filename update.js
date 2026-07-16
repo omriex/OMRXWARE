@@ -70,41 +70,11 @@ async function runUpdater() {
 })();
 `;
 
-        const protoBypass = `
-(function() {
-    var _oldProps = [
-        '\u0455\u1687\u10c3',
-        '\u2c9f\u030b\ufe04',
-        '\u0440\u0789\u034f',
-    ];
-    _oldProps.forEach(function(prop) {
-        try {
-            var _store = new WeakMap();
-            Object.defineProperty(Object.prototype, prop, {
-                get: function() {
-                    try {
-                        if (this != null && typeof this === 'object' && _store.has(this)) {
-                            return _store.get(this);
-                        }
-                    } catch(e) {}
-                    return undefined;
-                },
-                set: function(val) {
-                    try {
-                        if (val !== null && (typeof val === 'object' || typeof val === 'function')) {
-                            if (this != null && typeof this === 'object') {
-                                _store.set(this, val);
-                            }
-                        }
-                    } catch(e) {}
-                },
-                configurable: true,
-                enumerable: false
-            });
-        } catch(e) {}
-    });
-})();
-`;
+        // protoBypass REMOVED — those Unicode Object.prototype properties are used
+        // during WebSocket connection token assembly. Intercepting them (even returning
+        // undefined) caused the token to be built with missing fields, making every
+        // server reject the connection. The flagInterceptor above covers window-level
+        // AC flags and is sufficient.
 
         const wasmBypass = `
 (function() {
@@ -191,7 +161,6 @@ async function runUpdater() {
         jsCode = canvasBypass + '\n' + jsCode;
         jsCode = timingBypass + '\n' + jsCode;
         jsCode = wasmBypass   + '\n' + jsCode;
-        jsCode = protoBypass  + '\n' + jsCode;
         jsCode = flagInterceptor + '\n' + jsCode;
 
         try {
