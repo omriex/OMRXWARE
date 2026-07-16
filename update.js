@@ -25,10 +25,6 @@ async function runUpdater() {
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
         console.log('[OK] Zoom mod (' + physCount + ' replacements)');
 
-        // Array replacement REMOVED — the regex was too broad and could match
-        // arrays used in server-list decoding, corrupting the response and causing
-        // the [7]-on-undefined crash downstream.
-
         const flagVars = [];
         const tryFlagRe = /try\s*\{\s*(\S+)\s*=\s*[^=\n][^\n;]{5,800}\?\s*(?:0[xX]?1|01|1)\s*:\s*(?:0[xX]?0|0x0|00|0)\s*;\s*\}\s*catch\s*\(\s*\S+\s*\)\s*\{[^{}]*\}/g;
         let _m;
@@ -57,20 +53,22 @@ async function runUpdater() {
 })();
 `;
 
-        // evalPatch REMOVED — intercepting window.eval converts all direct evals
-        // (which have access to local closure variables) into indirect evals (global
-        // scope only), breaking any eval'd code that references closure variables.
-
+        // Each wrapper spoofs its own toString so the game sees "[native code]"
+        // and does not flag the token as hooked when it checks function identity.
         const wasmBypass = `
 (function() {
     var _origInstantiate = WebAssembly.instantiate;
     var _origInstantiateStreaming = WebAssembly.instantiateStreaming;
-    WebAssembly.instantiate = function(buf, imports) {
+    var _wrapInstantiate = function(buf, imports) {
         return _origInstantiate(buf, imports);
     };
-    WebAssembly.instantiateStreaming = function(src, imports) {
+    var _wrapInstantiateStreaming = function(src, imports) {
         return _origInstantiateStreaming(src, imports);
     };
+    _wrapInstantiate.toString = function() { return 'function instantiate() { [native code] }'; };
+    _wrapInstantiateStreaming.toString = function() { return 'function instantiateStreaming() { [native code] }'; };
+    WebAssembly.instantiate = _wrapInstantiate;
+    WebAssembly.instantiateStreaming = _wrapInstantiateStreaming;
 })();
 `;
 
@@ -78,20 +76,30 @@ async function runUpdater() {
 (function() {
     var _perfNow = performance.now.bind(performance);
     var _dateNow = Date.now.bind(Date);
-    performance.now = function() { return _perfNow(); };
-    Date.now = function() { return _dateNow(); };
+    var _wrapPerfNow = function() { return _perfNow(); };
+    var _wrapDateNow = function() { return _dateNow(); };
+    _wrapPerfNow.toString = function() { return 'function now() { [native code] }'; };
+    _wrapDateNow.toString = function() { return 'function now() { [native code] }'; };
+    performance.now = _wrapPerfNow;
+    Date.now = _wrapDateNow;
 })();
 `;
 
         const canvasBypass = `
 (function() {
     var _origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-    HTMLCanvasElement.prototype.toDataURL = function(type, quality) {
+    var _wrapToDataURL = function(type, quality) {
         return _origToDataURL.call(this, type, quality);
     };
+    _wrapToDataURL.toString = function() { return 'function toDataURL() { [native code] }'; };
+    HTMLCanvasElement.prototype.toDataURL = _wrapToDataURL;
     if (typeof OffscreenCanvas !== 'undefined') {
         var _origOff = OffscreenCanvas.prototype.convertToBlob;
-        if (_origOff) OffscreenCanvas.prototype.convertToBlob = _origOff;
+        if (_origOff) {
+            var _wrapOff = function() { return _origOff.apply(this, arguments); };
+            _wrapOff.toString = function() { return 'function convertToBlob() { [native code] }'; };
+            OffscreenCanvas.prototype.convertToBlob = _wrapOff;
+        }
     }
 })();
 `;
