@@ -25,22 +25,9 @@ async function runUpdater() {
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
         console.log('[OK] Zoom mod (' + physCount + ' replacements)');
 
-        jsCode = jsCode.replace(
-            /(\[\s*\d+\s*,\s*0[0-7]+\s*\]|\[\s*\d+\s*,\s*\d+\s*\])(?=\s*;[^}]{0,300}catch)/,
-            '(function(){' +
-                'var _a=[30,1133];' +
-                'var _v=new Proxy(_a,{' +
-                    'get:function(t,p){' +
-                        'if(p==="toString")return function(){return"OMRXWARE";};' +
-                        'if(p==="length")return t.length;' +
-                        'if(typeof p==="string"&&!isNaN(p)){var i=+p;return i<t.length?t[i]:0;}' +
-                        'if(typeof p==="symbol")return t[p];' +
-                        'return t[p];' +
-                    '}' +
-                '});' +
-                'return _v;' +
-            '})()'
-        );
+        // Array replacement REMOVED — the regex was too broad and could match
+        // arrays used in server-list decoding, corrupting the response and causing
+        // the [7]-on-undefined crash downstream.
 
         const flagVars = [];
         const tryFlagRe = /try\s*\{\s*(\S+)\s*=\s*[^=\n][^\n;]{5,800}\?\s*(?:0[xX]?1|01|1)\s*:\s*(?:0[xX]?0|0x0|00|0)\s*;\s*\}\s*catch\s*\(\s*\S+\s*\)\s*\{[^{}]*\}/g;
@@ -70,30 +57,9 @@ async function runUpdater() {
 })();
 `;
 
-        // FIX: Use new RegExp(string) instead of a regex literal inside the template
-        // literal. Regex literals inside template strings lose backslashes (\w → w,
-        // \d → d, \[ → [) making the pattern invalid. With new RegExp, each backslash
-        // needs to be doubled twice: once for the template literal and once for the
-        // string-to-regex conversion, so \w becomes \\\\w here.
-        //
-        // The pattern avoids matching property accesses like foo.bar[7] by using a
-        // negative lookbehind (?<![.\w]) — only standalone variable[N] is patched.
-        // Replacement: (variable||[])[N] so undefined[7] returns undefined instead
-        // of throwing TypeError.
-        const evalPatch = `
-(function() {
-    var _origEval = window.eval;
-    window.eval = function(code) {
-        if (typeof code === 'string' && code.length < 100000) {
-            try {
-                var _re = new RegExp('(?<![.\\\\w])([a-zA-Z_$][\\\\w$]{0,30})\\\\[([3-9]|[1-9]\\\\d+)\\\\]', 'g');
-                code = code.replace(_re, '($1||[])[$2]');
-            } catch(e) {}
-        }
-        return _origEval.call(this, code);
-    };
-})();
-`;
+        // evalPatch REMOVED — intercepting window.eval converts all direct evals
+        // (which have access to local closure variables) into indirect evals (global
+        // scope only), breaking any eval'd code that references closure variables.
 
         const wasmBypass = `
 (function() {
@@ -180,7 +146,6 @@ async function runUpdater() {
         jsCode = canvasBypass + '\n' + jsCode;
         jsCode = timingBypass + '\n' + jsCode;
         jsCode = wasmBypass   + '\n' + jsCode;
-        jsCode = evalPatch    + '\n' + jsCode;
         jsCode = flagInterceptor + '\n' + jsCode;
 
         try {
