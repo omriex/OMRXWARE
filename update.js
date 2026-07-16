@@ -24,7 +24,7 @@ async function runUpdater() {
 
         const physCount = (jsCode.match(/-0\.35/g) || []).length;
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
-        console.log('[OK] Physics mod (' + physCount + ' replacements)');
+        console.log('[OK] Zoom mod (' + physCount + ' replacements)');
 
         jsCode = jsCode.replace(
             /(\[\s*\d+\s*,\s*0[0-7]+\s*\]|\[\s*\d+\s*,\s*\d+\s*\])(?=\s*;[^}]{0,300}catch)/,
