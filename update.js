@@ -1,17 +1,5 @@
-const fs = require('fs');
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  OMRXWARE Updater – AC bypass via delayed Object.prototype mock
-//
-//  Strategy:
-//    • The game sets 3 flag vars (chrome/CSS/safari) – we do NOT touch them.
-//      Let the detection run naturally so the WebSocket token is valid.
-//    • The kill routine accesses the main WebSocket through obfuscated
-//      Unicode properties on Object.prototype, then calls .close().
-//    • We wait until the WebSocket connects (onopen), then immediately
-//      install a mock on those properties that returns a dummy object
-//      (with no‑op close). Any later kill attempt hits the dummy and fails.
-// ─────────────────────────────────────────────────────────────────────────────
+const fs = require('fs');
 
 async function runUpdater() {
     try {
@@ -21,6 +9,7 @@ async function runUpdater() {
 
         const scriptMatch = html.match(/src="(js\/[^"]+\.js[^"]*)"/i)
                          || html.match(/src="([^"]*client\.[0-9.]*min\.js[^"]*)"/i);
+
         if (!scriptMatch) throw new Error('Could not find client JS in HTML.');
 
         let jsUrl = scriptMatch[1];
@@ -33,116 +22,98 @@ async function runUpdater() {
         fs.writeFileSync('devast-original.js', jsCode);
         console.log('[OK] Saved devast-original.js');
 
-        // ── 1. Physics modifier ─────────────────────────────────────────────
         const physCount = (jsCode.match(/-0\.35/g) || []).length;
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
         console.log('[OK] Physics mod (' + physCount + ' replacements)');
 
-        // ── 2. Array-near-catch bypass ──────────────────────────────────────
         jsCode = jsCode.replace(
             /(\[\s*\d+\s*,\s*0[0-7]+\s*\]|\[\s*\d+\s*,\s*\d+\s*\])(?=\s*;[^}]{0,300}catch)/,
             '(function(){var _v=[30,1133];_v.toString=function(){return"OMRXWARE";};return _v;})()'
         );
 
-        // ── 3. Delayed AC bypass ────────────────────────────────────────────
-        // This script wraps the WebSocket constructor and waits for the
-        // 'open' event before installing the Object.prototype mock.
-        const acBypass = `
-(function() {
-    var _OrigWebSocket = window.WebSocket;
-    var _mockInstalled = false;
-
-    // Dummy socket that the kill routine will try to .close()
-    var _fakeSocket = {
-        close: function() { console.log('[OMRXWARE] Kill attempt blocked (fake socket close)'); },
-        send: function() {},
-        addEventListener: function() {},
-        removeEventListener: function() {},
-        readyState: 1,
-        onopen: null,
-        onclose: null,
-        onmessage: null,
-        onerror: null
-    };
-
-    // The Unicode properties the game uses to stash/reference the socket
-    var _props = [
-        '\u0455\u1687\u10c3',
-        '\u2c9f\u030b\ufe04',
-        '\u0440\u0789\u034f'
-    ];
-
-    function _installMock() {
-        if (_mockInstalled) return;
-        _mockInstalled = true;
-        _props.forEach(function(prop) {
-            try {
-                Object.defineProperty(Object.prototype, prop, {
-                    get: function() { return _fakeSocket; },
-                    set: function(val) { /* ignore attempts to set the real socket */ },
-                    configurable: true,
-                    enumerable: false
-                });
-            } catch(e) {}
-        });
-        console.log('[OMRXWARE] Delayed AC mock installed (after WebSocket open)');
-    }
-
-    window.WebSocket = function(url, protocols) {
-        var ws;
-        if (protocols) {
-            ws = new _OrigWebSocket(url, protocols);
-        } else {
-            ws = new _OrigWebSocket(url);
+        const flagVars = [];
+        const tryFlagRe = /try\s*\{\s*(\S+)\s*=\s*[^=\n][^\n;]{5,800}\?\s*(?:0[xX]?1|01|1)\s*:\s*(?:0[xX]?0|0x0|00|0)\s*;\s*\}\s*catch\s*\(\s*\S+\s*\)\s*\{[^{}]*\}/g;
+        let _m;
+        while ((_m = tryFlagRe.exec(jsCode)) !== null) {
+            if (!flagVars.includes(_m[1])) flagVars.push(_m[1]);
+        }
+        console.log('[AC] Detected ' + flagVars.length + ' flag var(s)');
+        if (flagVars.length === 0) {
+            console.warn('[AC] WARNING: No flag vars detected — AC pattern may have changed');
         }
 
-        // Install the mock as soon as the socket connects
-        ws.addEventListener('open', function() {
-            _installMock();
-        });
-
-        return ws;
-    };
-
-    // Keep static properties
-    window.WebSocket.prototype = _OrigWebSocket.prototype;
-    window.WebSocket.CONNECTING = _OrigWebSocket.CONNECTING;
-    window.WebSocket.OPEN = _OrigWebSocket.OPEN;
-    window.WebSocket.CLOSING = _OrigWebSocket.CLOSING;
-    window.WebSocket.CLOSED = _OrigWebSocket.CLOSED;
+        const flagInterceptor = `
+(function() {
+    var _flags = ${JSON.stringify(flagVars)};
+    _flags.forEach(function(f) {
+        try {
+            Object.defineProperty(window, f, {
+                get: function() { return 0; },
+                set: function(v) { /* silently ignore assignments */ },
+                configurable: false,
+                enumerable: false
+            });
+        } catch(e) {}
+    });
+    console.log('[OMRXWARE] AC flag interceptors installed:', _flags.length);
 })();
 `;
 
-        // ── 4. WebAssembly passthrough ──────────────────────────────────────
+        const protoBypass = `
+(function() {
+    var _oldProps = [
+        '\u0455\u1687\u10c3',
+        '\u2c9f\u030b\ufe04',
+        '\u0440\u0789\u034f',
+    ];
+    _oldProps.forEach(function(prop) {
+        try {
+            Object.defineProperty(Object.prototype, prop, {
+                get: function() { return 0; },
+                set: function(val) {},
+                configurable: true,
+                enumerable: false
+            });
+        } catch(e) {}
+    });
+})();
+`;
+
         const wasmBypass = `
 (function() {
     var _origInstantiate = WebAssembly.instantiate;
     var _origInstantiateStreaming = WebAssembly.instantiateStreaming;
-    WebAssembly.instantiate = function(buf, imports) { return _origInstantiate(buf, imports); };
-    WebAssembly.instantiateStreaming = function(src, imports) { return _origInstantiateStreaming(src, imports); };
-})();`;
+    WebAssembly.instantiate = function(buf, imports) {
+        return _origInstantiate(buf, imports);
+    };
+    WebAssembly.instantiateStreaming = function(src, imports) {
+        return _origInstantiateStreaming(src, imports);
+    };
+})();
+`;
 
-        // ── 5. Timing passthrough ────────────────────────────────────────────
         const timingBypass = `
 (function() {
     var _perfNow = performance.now.bind(performance);
     var _dateNow = Date.now.bind(Date);
     performance.now = function() { return _perfNow(); };
     Date.now = function() { return _dateNow(); };
-})();`;
+})();
+`;
 
-        // ── 6. Canvas passthrough ────────────────────────────────────────────
         const canvasBypass = `
 (function() {
     var _origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-    HTMLCanvasElement.prototype.toDataURL = function(type, quality) { return _origToDataURL.call(this, type, quality); };
+    HTMLCanvasElement.prototype.toDataURL = function(type, quality) {
+        return _origToDataURL.call(this, type, quality);
+    };
     if (typeof OffscreenCanvas !== 'undefined') {
         var _origOff = OffscreenCanvas.prototype.convertToBlob;
         if (_origOff) OffscreenCanvas.prototype.convertToBlob = _origOff;
     }
-})();`;
+})();
+`;
 
-        // ── 7. UI / ad remover ───────────────────────────────────────────────
         const uiRemover = `
 (function() {
     var targets = [
@@ -164,6 +135,7 @@ async function runUpdater() {
     style.innerHTML += ' .bebebaba { display:none!important; }';
     if (document.head) document.head.appendChild(style);
     else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
+
     const origDraw = CanvasRenderingContext2D.prototype.drawImage;
     CanvasRenderingContext2D.prototype.drawImage = function() {
         try {
@@ -185,16 +157,16 @@ async function runUpdater() {
         } catch(e) {}
         return origDraw.apply(this, arguments);
     };
-})();`;
+})();
+`;
 
-        // Prepend all bypass scripts (order matters for some overrides)
         jsCode = uiRemover    + '\n' + jsCode;
         jsCode = canvasBypass + '\n' + jsCode;
         jsCode = timingBypass + '\n' + jsCode;
         jsCode = wasmBypass   + '\n' + jsCode;
-        jsCode = acBypass     + '\n' + jsCode;   // WebSocket wrapper runs early
+        jsCode = protoBypass  + '\n' + jsCode;
+        jsCode = flagInterceptor + '\n' + jsCode;
 
-        // ── 8. Inject omrxware.js ───────────────────────────────────────────
         try {
             const myScript = fs.readFileSync('omrxware.js', 'utf8');
             const b64 = Buffer.from(myScript).toString('base64');
