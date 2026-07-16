@@ -1,4 +1,3 @@
-
 const fs = require('fs');
 
 async function runUpdater() {
@@ -59,6 +58,9 @@ async function runUpdater() {
 })();
 `;
 
+        // FIX: Use a WeakMap to store non-primitive values (objects, functions) so that
+        // methods like .close() remain accessible. Only silently drop primitive AC flag
+        // writes (numbers/booleans), which is what the AC checks assign.
         const protoBypass = `
 (function() {
     var _oldProps = [
@@ -68,9 +70,20 @@ async function runUpdater() {
     ];
     _oldProps.forEach(function(prop) {
         try {
+            var _store = new WeakMap();
             Object.defineProperty(Object.prototype, prop, {
-                get: function() { return 0; },
-                set: function(val) {},
+                get: function() {
+                    if (_store.has(this)) return _store.get(this);
+                    return 0;
+                },
+                set: function(val) {
+                    // Pass through objects and functions so their methods (e.g. .close())
+                    // remain callable. Only block primitive AC flag writes (0/1/true/false).
+                    if (val !== null && (typeof val === 'object' || typeof val === 'function')) {
+                        _store.set(this, val);
+                    }
+                    // Silently drop primitive assignments (AC flag pattern)
+                },
                 configurable: true,
                 enumerable: false
             });
