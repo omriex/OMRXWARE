@@ -1,12 +1,32 @@
 
 const fs = require('fs');
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  OMRXWARE Updater — permanent, obfuscation-resilient
+//
+//  AC bypass strategy (revised):
+//    Devast sets 3 flag vars (chrome/CSS/safari detection) in the outer JS,
+//    then the INNER eval'd game reads them:
+//      • if flags = 1  → game allows joining, then kills you in-game
+//      • if flags = 0  → game BLOCKS joining (WebSocket never opens)
+//
+//    Old approach (blanking try-catch) forced flags = 0 → can't join.
+//
+//    Correct approach:
+//      1. Detect the 3 flag var names structurally (no hardcoding)
+//      2. Use Object.defineProperty(window, flagName, { get:()=>0, set:()=>{} })
+//         BEFORE the game code runs → detection try-catch executes fine
+//         (so any server-side fingerprint check is unaffected) but every
+//         READ of those vars via global scope returns 0 → kill condition fails.
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function runUpdater() {
     try {
         console.log('Fetching Devast.io...');
         const htmlResponse = await fetch('https://devast.io/');
         const html = await htmlResponse.text();
 
+        // Match any .js file in the /js/ directory — covers all naming schemes
         const scriptMatch = html.match(/src="(js\/[^"]+\.js[^"]*)"/i)
                          || html.match(/src="([^"]*client\.[0-9.]*min\.js[^"]*)"/i);
 
@@ -22,15 +42,29 @@ async function runUpdater() {
         fs.writeFileSync('devast-original.js', jsCode);
         console.log('[OK] Saved devast-original.js');
 
+        // ── 1. Physics modifier ─────────────────────────────────────────────
         const physCount = (jsCode.match(/-0\.35/g) || []).length;
         jsCode = jsCode.replace(/-0\.35/g, '-0.65');
         console.log('[OK] Physics mod (' + physCount + ' replacements)');
 
+        // ── 2. Array-near-catch bypass ──────────────────────────────────────
         jsCode = jsCode.replace(
             /(\[\s*\d+\s*,\s*0[0-7]+\s*\]|\[\s*\d+\s*,\s*\d+\s*\])(?=\s*;[^}]{0,300}catch)/,
             '(function(){var _v=[30,1133];_v.toString=function(){return"OMRXWARE";};return _v;})()'
         );
 
+        // ── 3. Detect AC flag variable names ────────────────────────────────
+        //
+        // The 3 browser-fingerprint flag vars always follow this exact structure:
+        //
+        //   var <flagVar> = 0;          ← declared as 0
+        //   try {                       ← immediately followed by try
+        //       <flagVar> = (<probe>) ? 1 : 0;
+        //   } catch (<x>) {}
+        //
+        // We detect them by matching the assignment pattern inside the try block.
+        // The variable names change every update — we never hardcode them.
+        //
         const flagVars = [];
         const tryFlagRe = /try\s*\{\s*(\S+)\s*=\s*[^=\n][^\n;]{5,800}\?\s*(?:0[xX]?1|01|1)\s*:\s*(?:0[xX]?0|0x0|00|0)\s*;\s*\}\s*catch\s*\(\s*\S+\s*\)\s*\{[^{}]*\}/g;
         let _m;
@@ -42,43 +76,86 @@ async function runUpdater() {
             console.warn('[AC] WARNING: No flag vars detected — AC pattern may have changed');
         }
 
+        // ── 4. Window-property interceptor (prepended code) ─────────────────
+        //
+        // SMART SETTER STRATEGY:
+        //   The inner eval'd game runs in the same global scope as the outer JS.
+        //   They can share variable names: the outer code uses flagVar for the
+        //   AC detection result (0 or 1), while the inner code may use the same
+        //   name for a WebSocket, connection object, or other game state.
+        //
+        //   Naive approach (always return 0): breaks the inner game because
+        //     flagVar = new WebSocket(...) gets ignored → undefined.close error.
+        //
+        //   Smart approach: only zero NUMERIC assignments (AC flags are always
+        //     exactly 0 or 1). Pass through all other types (objects, functions,
+        //     strings). This kills the AC flag while letting the WebSocket and
+        //     any other game state pass through untouched.
+        //
         const flagInterceptor = `
 (function() {
     var _flags = ${JSON.stringify(flagVars)};
     _flags.forEach(function(f) {
+        var _stored = 0;
         try {
             Object.defineProperty(window, f, {
-                get: function() { return 0; },
-                set: function(v) { /* silently ignore assignments */ },
-                configurable: false,
-                enumerable: false
-            });
-        } catch(e) {}
-    });
-    console.log('[OMRXWARE] AC flag interceptors installed:', _flags.length);
-})();
-`;
-
-        const protoBypass = `
-(function() {
-    var _oldProps = [
-        '\u0455\u1687\u10c3',
-        '\u2c9f\u030b\ufe04',
-        '\u0440\u0789\u034f',
-    ];
-    _oldProps.forEach(function(prop) {
-        try {
-            Object.defineProperty(Object.prototype, prop, {
-                get: function() { return 0; },
-                set: function(val) {},
+                get: function() { return _stored; },
+                set: function(v) {
+                    if (typeof v === 'number') {
+                        _stored = 0; // AC flag (0 or 1) → force to 0 always
+                    } else {
+                        _stored = v; // WebSocket / object / etc. → pass through
+                    }
+                },
                 configurable: true,
                 enumerable: false
             });
         } catch(e) {}
     });
+    console.log('[OMRXWARE] Smart AC interceptors:', _flags.length);
 })();
 `;
 
+
+        // ── 5. Token server XHR hook ─────────────────────────────────────────
+        //
+        // The inner game fetches https://token.devast.io/<hash> as part of join.
+        // If the server returns 404 (wrong token due to modified client), the
+        // game's error handler calls ρ๗ǧ().close() on an undefined WebSocket.
+        //
+        // Fix: intercept the token XHR, let it complete with a fake 200 so the
+        // game never enters the 404 error path.
+        //
+        const tokenHook = `
+(function() {
+    var _open = XMLHttpRequest.prototype.open;
+    var _send = XMLHttpRequest.prototype.send;
+
+    XMLHttpRequest.prototype.open = function(method, url) {
+        this._url = url;
+        return _open.apply(this, arguments);
+    };
+
+    XMLHttpRequest.prototype.send = function(body) {
+        if (typeof this._url === 'string' && this._url.indexOf('token.devast.io') !== -1) {
+            // Fake a 200 OK so the join flow proceeds
+            var self = this;
+            Object.defineProperty(self, 'readyState', { get: function() { return 4; }, configurable: true });
+            Object.defineProperty(self, 'status',    { get: function() { return 200; }, configurable: true });
+            Object.defineProperty(self, 'responseText', { get: function() { return ''; }, configurable: true });
+            setTimeout(function() {
+                try { if (self.onreadystatechange) self.onreadystatechange(); } catch(e) {}
+                try { if (self.onload) self.onload(); } catch(e) {}
+            }, 10);
+            return;
+        }
+        return _send.apply(this, arguments);
+    };
+    console.log('[OMRXWARE] Token hook active');
+})();
+`;
+
+        // ── 6. WebAssembly passthrough ──────────────────────────────────────
         const wasmBypass = `
 (function() {
     var _origInstantiate = WebAssembly.instantiate;
@@ -92,6 +169,7 @@ async function runUpdater() {
 })();
 `;
 
+        // ── 7. Timing passthrough ────────────────────────────────────────────
         const timingBypass = `
 (function() {
     var _perfNow = performance.now.bind(performance);
@@ -101,6 +179,7 @@ async function runUpdater() {
 })();
 `;
 
+        // ── 8. Canvas passthrough ────────────────────────────────────────────
         const canvasBypass = `
 (function() {
     var _origToDataURL = HTMLCanvasElement.prototype.toDataURL;
@@ -114,6 +193,7 @@ async function runUpdater() {
 })();
 `;
 
+        // ── 9. UI / ad remover ───────────────────────────────────────────────
         const uiRemover = `
 (function() {
     var targets = [
@@ -160,13 +240,16 @@ async function runUpdater() {
 })();
 `;
 
+        // Prepend all bypass code (last prepended = first to run)
         jsCode = uiRemover    + '\n' + jsCode;
         jsCode = canvasBypass + '\n' + jsCode;
         jsCode = timingBypass + '\n' + jsCode;
         jsCode = wasmBypass   + '\n' + jsCode;
-        jsCode = protoBypass  + '\n' + jsCode;
+        jsCode = tokenHook    + '\n' + jsCode;
+        // flagInterceptor runs FIRST (before any game code) so it wins
         jsCode = flagInterceptor + '\n' + jsCode;
 
+        // ── 10. Inject omrxware.js ───────────────────────────────────────────
         try {
             const myScript = fs.readFileSync('omrxware.js', 'utf8');
             const b64 = Buffer.from(myScript).toString('base64');
