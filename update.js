@@ -6,7 +6,8 @@ async function runUpdater() {
         const htmlResponse = await fetch('https://devast.io/');
         const html = await htmlResponse.text();
 
-        const scriptMatch = html.match(/src="([^"]*client\.[0-9.]*min\.js[^"]*)"/i);
+        const scriptMatch = html.match(/src="(js\/[^"]+\.js[^"]*)"/i)
+                         || html.match(/src="([^"]*client\.[0-9.]*min\.js[^"]*)"/i);
         if (!scriptMatch) throw new Error("Could not find the client.js file.");
 
         let jsUrl = scriptMatch[1];
