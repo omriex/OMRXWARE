@@ -147,35 +147,27 @@ async function runUpdater() {
 `;
 
 
-        // ── 4. Token server XHR hook ─────────────────────────────────────────
+        // ── 4. Runtime zoom-out extender ──────────────────────────────────
         //
-        // The inner game fetches https://token.devast.io/<hash> during join.
-        // If it returns 404 (e.g., hash mismatch), the error handler crashes on
-        // undefined.close(). We intercept the request and fake a 200 response.
+        // The old -0.35 zoom clamp was removed by devast.io. We restore extended
+        // zoom by hooking Math.max at runtime: when the game calls
+        // Math.max(CLAMP_MIN, ...) to limit how far out you can scroll, we
+        // replace the CLAMP_MIN with a more negative value so you can zoom out
+        // further. Only intercepts calls where the first arg is a small negative
+        // number in the zoom-clamp range (-0.1 to -0.9).
         //
-        const tokenHook = `
+        const zoomBypass = `
 (function() {
-    var _open = XMLHttpRequest.prototype.open;
-    var _send = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function(method, url) {
-        this._omrx_url = url;
-        return _open.apply(this, arguments);
-    };
-    XMLHttpRequest.prototype.send = function(body) {
-        if (typeof this._omrx_url === 'string' && this._omrx_url.indexOf('token.devast.io') !== -1) {
-            var self = this;
-            try { Object.defineProperty(self, 'readyState',   { get: function() { return 4; }, configurable: true }); } catch(e) {}
-            try { Object.defineProperty(self, 'status',       { get: function() { return 200; }, configurable: true }); } catch(e) {}
-            try { Object.defineProperty(self, 'responseText', { get: function() { return ''; }, configurable: true }); } catch(e) {}
-            setTimeout(function() {
-                try { if (self.onreadystatechange) self.onreadystatechange(); } catch(e) {}
-                try { if (self.onload) self.onload(); } catch(e) {}
-            }, 10);
-            return;
+    var _origMax = Math.max;
+    Math.max = function(a, b) {
+        // If this looks like a zoom clamp (small negative min, second arg is the zoom var)
+        if (typeof a === 'number' && a < 0 && a > -0.9 && arguments.length === 2) {
+            // Allow zooming out 30% further than the game intends
+            return _origMax(a * 1.3, b);
         }
-        return _send.apply(this, arguments);
+        return _origMax.apply(this, arguments);
     };
-    console.log('[OMRXWARE] Token hook active');
+    console.log('[OMRXWARE] Zoom extender active');
 })();
 `;
 
@@ -271,7 +263,7 @@ async function runUpdater() {
         jsCode = canvasBypass    + '\n' + jsCode;
         jsCode = timingBypass    + '\n' + jsCode;
         jsCode = wasmBypass      + '\n' + jsCode;
-        jsCode = tokenHook       + '\n' + jsCode;
+        jsCode = zoomBypass      + '\n' + jsCode;
         jsCode = delayedKillBypass + '\n' + jsCode;  // runs first — hooks WS before game
 
         // ── 9. Inject omrxware.js ────────────────────────────────────────────
