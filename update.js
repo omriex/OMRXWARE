@@ -1,12 +1,42 @@
 
 const fs = require('fs');
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  OMRXWARE Updater — permanent, obfuscation-resilient
+//
+//  AC bypass strategy (v3 — delayed interceptor):
+//
+//  HOW DEVAST.IO AC WORKS:
+//   1. Outer JS sets 3 global flag vars (chrome/CSS/safari detection) to 0 or 1
+//   2. Inner eval'd game reads them to:
+//      (a) Compute a hash for the WebSocket URL query string
+//      (b) Schedule a kill timer that fires if flags indicate Chrome
+//
+//  WHAT WENT WRONG BEFORE:
+//   • Zeroing flags immediately → wrong WS hash → server rejects → can't join
+//   • protoBypass on Object.prototype → inner game objects (WebSocket etc.) broken
+//
+//  CORRECT FIX — DELAYED INTERCEPTOR:
+//   • Phase 1 (before WS opens): NO interceptors. Flags = 1 (natural Chrome value).
+//     WS URL hash is computed correctly → server accepts → connection opens.
+//   • Phase 2 (500ms after WS open event): install smart property interceptors.
+//     - Numeric assignments → stored as 0 (kills the AC flag value)
+//     - Non-numeric (objects, WebSocket…) → pass through normally
+//     Kill timer reads flag → 0 → condition false → no kill. ✓
+//
+//  OBFUSCATION RESILIENCE:
+//   • Flag var names: detected structurally from try-catch pattern (never hardcoded)
+//   • Client JS URL: matched from HTML as js/<anything>.js
+//   • Interceptors: work even if Devast renames the flags every update
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function runUpdater() {
     try {
         console.log('Fetching Devast.io...');
         const htmlResponse = await fetch('https://devast.io/');
         const html = await htmlResponse.text();
 
+        // Match any JS in /js/ directory — handles all naming schemes (hash, base62, etc.)
         const scriptMatch = html.match(/src="(js\/[^"]+\.js[^"]*)"/i)
                          || html.match(/src="([^"]*client\.[0-9.]*min\.js[^"]*)"/i);
 
@@ -22,63 +52,158 @@ async function runUpdater() {
         fs.writeFileSync('devast-original.js', jsCode);
         console.log('[OK] Saved devast-original.js');
 
+        // ── 1. Physics modifier ─────────────────────────────────────────────
         const physCount = (jsCode.match(/-0\.35/g) || []).length;
-        jsCode = jsCode.replace(/-0\.35/g, '-0.65');
-        console.log('[OK] Physics mod (' + physCount + ' replacements)');
+        if (physCount > 0) {
+            jsCode = jsCode.replace(/-0\.35/g, '-0.65');
+            console.log('[OK] Physics mod (' + physCount + ' replacements)');
+        } else {
+            console.log('[OK] Physics mod (none found — may already be patched or moved)');
+        }
 
-        jsCode = jsCode.replace(
-            /(\[\s*\d+\s*,\s*0[0-7]+\s*\]|\[\s*\d+\s*,\s*\d+\s*\])(?=\s*;[^}]{0,300}catch)/,
-            '(function(){var _v=[30,1133];_v.toString=function(){return"OMRXWARE";};return _v;})()'
-        );
-
+        // ── 2. Detect AC flag variable names ────────────────────────────────
+        //
+        // The 3 browser-fingerprint flag vars always follow this structure:
+        //
+        //   var <flagVar> = 0;
+        //   try {
+        //       <flagVar> = (<browser probe>) ? 1 : 0;
+        //   } catch (<x>) {}
+        //
+        // Multiple regex fallbacks to handle obfuscation variations:
+        //
         const flagVars = [];
+
+        // Primary: standard ternary in try-catch
         const tryFlagRe = /try\s*\{\s*(\S+)\s*=\s*[^=\n][^\n;]{5,800}\?\s*(?:0[xX]?1|01|1)\s*:\s*(?:0[xX]?0|0x0|00|0)\s*;\s*\}\s*catch\s*\(\s*\S+\s*\)\s*\{[^{}]*\}/g;
         let _m;
         while ((_m = tryFlagRe.exec(jsCode)) !== null) {
             if (!flagVars.includes(_m[1])) flagVars.push(_m[1]);
         }
-        console.log('[AC] Detected ' + flagVars.length + ' flag var(s)');
-        if (flagVars.length === 0) {
-            console.warn('[AC] WARNING: No flag vars detected — AC pattern may have changed');
+
+        // Fallback: look for var X = 0; immediately before try { X = ... }
+        if (flagVars.length < 3) {
+            const declRe = /var\s+(\S+)\s*=\s*(?:0[xX]?0|00|0)\s*;/g;
+            while ((_m = declRe.exec(jsCode)) !== null) {
+                if (flagVars.includes(_m[1])) continue;
+                const next400 = jsCode.substring(_m.index, _m.index + 500);
+                if (/try\s*\{/.test(next400) && /chrome|CSS|safari/i.test(next400)) {
+                    flagVars.push(_m[1]);
+                }
+            }
         }
 
-        const flagInterceptor = `
+        console.log('[AC] Detected ' + flagVars.length + ' flag var(s):', flagVars.map(f => JSON.stringify(f)).join(', ') || 'none');
+        if (flagVars.length === 0) {
+            console.warn('[AC] WARNING: No flag vars found — AC structure may have changed. Kill bypass will be partial.');
+        }
+
+        // ── 3. Delayed kill bypass (the core AC bypass) ──────────────────────
+        //
+        // Installs property interceptors for the flag vars AFTER the game's
+        // WebSocket connection to the real server opens. This way:
+        //   • During WS URL hash computation: flags = 1 (correct) → server accepts
+        //   • After WS opens (500ms delay): flags forced to 0 → kill timer fails
+        //
+        const delayedKillBypass = `
 (function() {
     var _flags = ${JSON.stringify(flagVars)};
-    _flags.forEach(function(f) {
+    var _installed = false;
+
+    function installKillBypass() {
+        if (_installed) return;
+        _installed = true;
+        _flags.forEach(function(f) {
+            var _stored = 0;
+            try {
+                Object.defineProperty(window, f, {
+                    get: function() { return _stored; },
+                    set: function(v) {
+                        // AC flags are always numeric (0 or 1).
+                        // Game objects (WebSocket, etc.) are non-numeric → pass through.
+                        if (typeof v === 'number') {
+                            _stored = 0;
+                        } else {
+                            _stored = v;
+                        }
+                    },
+                    configurable: true,
+                    enumerable: false
+                });
+            } catch(e) {}
+        });
+        console.log('[OMRXWARE] Kill bypass active (' + _flags.length + ' flags zeroed)');
+    }
+
+    // Hook WebSocket: install interceptors 500ms after game server WS opens.
+    // This gives the hash-computation code time to read the correct flag values
+    // before we zero them, while still zeroing them before the kill timer fires.
+    var _origWS = window.WebSocket;
+    function _hookedWS(url, protocols) {
+        var ws;
         try {
-            Object.defineProperty(window, f, {
-                get: function() { return 0; },
-                set: function(v) { /* silently ignore assignments */ },
-                configurable: false,
-                enumerable: false
+            ws = (protocols != null) ? new _origWS(url, protocols) : new _origWS(url);
+        } catch(e) { throw e; }
+
+        // Only hook the real game server, not the AC localhost probe (127.0.0.1)
+        if (typeof url === 'string' && url.indexOf('devast.io') !== -1) {
+            ws.addEventListener('open', function() {
+                setTimeout(installKillBypass, 500);
             });
-        } catch(e) {}
-    });
-    console.log('[OMRXWARE] AC flag interceptors installed:', _flags.length);
+            // Belt-and-suspenders: also hook on first message
+            ws.addEventListener('message', function onMsg() {
+                ws.removeEventListener('message', onMsg);
+                setTimeout(installKillBypass, 100);
+            });
+        }
+        return ws;
+    }
+    _hookedWS.prototype = _origWS.prototype;
+    _hookedWS.CONNECTING = _origWS.CONNECTING;
+    _hookedWS.OPEN       = _origWS.OPEN;
+    _hookedWS.CLOSING    = _origWS.CLOSING;
+    _hookedWS.CLOSED     = _origWS.CLOSED;
+    window.WebSocket = _hookedWS;
+
+    // Safety fallback: if WS never opens for some reason, still install after 20s
+    setTimeout(installKillBypass, 20000);
+    console.log('[OMRXWARE] Delayed kill bypass ready (flags:', _flags.length, ')');
 })();
 `;
 
-        const protoBypass = `
+        // ── 4. Token server XHR hook ─────────────────────────────────────────
+        //
+        // The inner game fetches https://token.devast.io/<hash> during join.
+        // If it returns 404 (e.g., hash mismatch), the error handler crashes on
+        // undefined.close(). We intercept the request and fake a 200 response.
+        //
+        const tokenHook = `
 (function() {
-    var _oldProps = [
-        '\u0455\u1687\u10c3',
-        '\u2c9f\u030b\ufe04',
-        '\u0440\u0789\u034f',
-    ];
-    _oldProps.forEach(function(prop) {
-        try {
-            Object.defineProperty(Object.prototype, prop, {
-                get: function() { return 0; },
-                set: function(val) {},
-                configurable: true,
-                enumerable: false
-            });
-        } catch(e) {}
-    });
+    var _open = XMLHttpRequest.prototype.open;
+    var _send = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, url) {
+        this._omrx_url = url;
+        return _open.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function(body) {
+        if (typeof this._omrx_url === 'string' && this._omrx_url.indexOf('token.devast.io') !== -1) {
+            var self = this;
+            try { Object.defineProperty(self, 'readyState',   { get: function() { return 4; }, configurable: true }); } catch(e) {}
+            try { Object.defineProperty(self, 'status',       { get: function() { return 200; }, configurable: true }); } catch(e) {}
+            try { Object.defineProperty(self, 'responseText', { get: function() { return ''; }, configurable: true }); } catch(e) {}
+            setTimeout(function() {
+                try { if (self.onreadystatechange) self.onreadystatechange(); } catch(e) {}
+                try { if (self.onload) self.onload(); } catch(e) {}
+            }, 10);
+            return;
+        }
+        return _send.apply(this, arguments);
+    };
+    console.log('[OMRXWARE] Token hook active');
 })();
 `;
 
+        // ── 5. WebAssembly passthrough ──────────────────────────────────────
         const wasmBypass = `
 (function() {
     var _origInstantiate = WebAssembly.instantiate;
@@ -92,6 +217,7 @@ async function runUpdater() {
 })();
 `;
 
+        // ── 6. Timing passthrough ────────────────────────────────────────────
         const timingBypass = `
 (function() {
     var _perfNow = performance.now.bind(performance);
@@ -101,6 +227,7 @@ async function runUpdater() {
 })();
 `;
 
+        // ── 7. Canvas passthrough ────────────────────────────────────────────
         const canvasBypass = `
 (function() {
     var _origToDataURL = HTMLCanvasElement.prototype.toDataURL;
@@ -114,6 +241,7 @@ async function runUpdater() {
 })();
 `;
 
+        // ── 8. UI / ad remover ───────────────────────────────────────────────
         const uiRemover = `
 (function() {
     var targets = [
@@ -134,9 +262,9 @@ async function runUpdater() {
     style.innerHTML = '#' + targets.join(', #') + ' { display:none!important; opacity:0!important; visibility:hidden!important; pointer-events:none!important; z-index:-9999!important; width:0!important; height:0!important; }';
     style.innerHTML += ' .bebebaba { display:none!important; }';
     if (document.head) document.head.appendChild(style);
-    else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
+    else document.addEventListener('DOMContentLoaded', function() { document.head.appendChild(style); });
 
-    const origDraw = CanvasRenderingContext2D.prototype.drawImage;
+    var origDraw = CanvasRenderingContext2D.prototype.drawImage;
     CanvasRenderingContext2D.prototype.drawImage = function() {
         try {
             var nick = document.getElementById('nicknameInput');
@@ -160,13 +288,17 @@ async function runUpdater() {
 })();
 `;
 
-        jsCode = uiRemover    + '\n' + jsCode;
-        jsCode = canvasBypass + '\n' + jsCode;
-        jsCode = timingBypass + '\n' + jsCode;
-        jsCode = wasmBypass   + '\n' + jsCode;
-        jsCode = protoBypass  + '\n' + jsCode;
-        jsCode = flagInterceptor + '\n' + jsCode;
+        // Prepend all bypass code.
+        // Order: last prepended = first to run in browser.
+        // delayedKillBypass must run BEFORE game code (to hook WebSocket early).
+        jsCode = uiRemover       + '\n' + jsCode;
+        jsCode = canvasBypass    + '\n' + jsCode;
+        jsCode = timingBypass    + '\n' + jsCode;
+        jsCode = wasmBypass      + '\n' + jsCode;
+        jsCode = tokenHook       + '\n' + jsCode;
+        jsCode = delayedKillBypass + '\n' + jsCode;  // runs first — hooks WS before game
 
+        // ── 9. Inject omrxware.js ────────────────────────────────────────────
         try {
             const myScript = fs.readFileSync('omrxware.js', 'utf8');
             const b64 = Buffer.from(myScript).toString('base64');
