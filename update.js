@@ -135,41 +135,17 @@ async function runUpdater() {
         console.log('[OMRXWARE] Kill bypass active (' + _flags.length + ' flags zeroed)');
     }
 
-    // Hook WebSocket: install interceptors 500ms after game server WS opens.
-    // This gives the hash-computation code time to read the correct flag values
-    // before we zero them, while still zeroing them before the kill timer fires.
-    var _origWS = window.WebSocket;
-    function _hookedWS(url, protocols) {
-        var ws;
-        try {
-            ws = (protocols != null) ? new _origWS(url, protocols) : new _origWS(url);
-        } catch(e) { throw e; }
-
-        // Only hook the real game server, not the AC localhost probe (127.0.0.1)
-        if (typeof url === 'string' && url.indexOf('devast.io') !== -1) {
-            ws.addEventListener('open', function() {
-                setTimeout(installKillBypass, 500);
-            });
-            // Belt-and-suspenders: also hook on first message
-            ws.addEventListener('message', function onMsg() {
-                ws.removeEventListener('message', onMsg);
-                setTimeout(installKillBypass, 100);
-            });
-        }
-        return ws;
-    }
-    _hookedWS.prototype = _origWS.prototype;
-    _hookedWS.CONNECTING = _origWS.CONNECTING;
-    _hookedWS.OPEN       = _origWS.OPEN;
-    _hookedWS.CLOSING    = _origWS.CLOSING;
-    _hookedWS.CLOSED     = _origWS.CLOSED;
-    window.WebSocket = _hookedWS;
-
-    // Safety fallback: if WS never opens for some reason, still install after 20s
-    setTimeout(installKillBypass, 20000);
-    console.log('[OMRXWARE] Delayed kill bypass ready (flags:', _flags.length, ')');
+    // Simple 5-second timeout — no WebSocket hooking.
+    // Timeline:
+    //   ~0-2s : inner game computes WS URL hash (flags=1, correct)
+    //   ~5s   : we zero the flags (kill condition now fails)
+    //   ~6s+  : kill timer fires → reads 0 → no kill ✓
+    // Hooking WebSocket was AC-detectable (function name mismatch).
+    setTimeout(installKillBypass, 5000);
+    console.log('[OMRXWARE] Kill bypass scheduled in 5s (flags:', _flags.length, ')');
 })();
 `;
+
 
         // ── 4. Token server XHR hook ─────────────────────────────────────────
         //
