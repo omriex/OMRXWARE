@@ -268,15 +268,17 @@ async function runUpdater() {
 })();
 `;
 
-        // Prepend all bypass code.
-        // Order: last prepended = first to run in browser.
-        // delayedKillBypass must run BEFORE game code (to hook WebSocket early).
-        jsCode = uiRemover       + '\n' + jsCode;
-        jsCode = canvasBypass    + '\n' + jsCode;
-        jsCode = timingBypass    + '\n' + jsCode;
-        jsCode = wasmBypass      + '\n' + jsCode;
-        jsCode = wsCloseGuard    + '\n' + jsCode;
-        jsCode = delayedKillBypass + '\n' + jsCode;  // runs first — hooks WS before game
+        // Only prepend the kill bypass. All other hooks (wsCloseGuard, wasmBypass,
+        // timingBypass, canvasBypass, uiRemover) wrap native browser APIs, making
+        // their .toString() return user code instead of "[native code]". The game
+        // hashes these function signatures into the WebSocket URL query string →
+        // any hook causes the server to reject the connection.
+        //
+        // The kill bypass is safe: it uses Object.defineProperty on plain global
+        // variables (the AC flag vars), not on any browser API. At T=5s these vars
+        // get property interceptors. By then the WS URL hash has been computed and
+        // the connection is already open.
+        jsCode = delayedKillBypass + '\n' + jsCode;
 
         // ── 9. Inject omrxware.js ────────────────────────────────────────────
         try {
