@@ -30,57 +30,36 @@ async function runUpdater() {
             console.log('[OK] Physics mod (none found – may already be patched)');
         }
 
-        // Detect AC flag variable names
-        const flagVars = [];
-        const tryFlagRe = /try\s*\{\s*(\S+)\s*=\s*[^=\n][^\n;]{5,800}\?\s*(?:0[xX]?1|01|1)\s*:\s*(?:0[xX]?0|0x0|00|0)\s*;\s*\}\s*catch\s*\(\s*\S+\s*\)\s*\{[^{}]*\}/g;
-        let m;
-        while ((m = tryFlagRe.exec(jsCode)) !== null) {
-            if (!flagVars.includes(m[1])) flagVars.push(m[1]);
-        }
-        if (flagVars.length < 3) {
-            const declRe = /var\s+(\S+)\s*=\s*(?:0[xX]?0|00|0)\s*;/g;
-            while ((m = declRe.exec(jsCode)) !== null) {
-                if (flagVars.includes(m[1])) continue;
-                const next500 = jsCode.substring(m.index, m.index + 500);
-                if (/try\s*\{/.test(next500) && /chrome|CSS|safari/i.test(next500)) {
-                    flagVars.push(m[1]);
-                }
-            }
-        }
-        console.log('[AC] Detected', flagVars.length, 'flag var(s):', flagVars.map(JSON.stringify).join(', ') || 'none');
-
-        // Delayed kill bypass – the only hook, safe because it doesn't wrap native APIs
-        const delayedKillBypass = `
+        // ── New kill bypass: proxy WebSocket constructor, patch instances ──
+        const killBypass = `
 (function() {
-    var _flags = ${JSON.stringify(flagVars)};
-    var _installed = false;
+    var NativeWebSocket = WebSocket;
+    var wsInstances = [];
 
-    function installKillBypass() {
-        if (_installed) return;
-        _installed = true;
-        _flags.forEach(function(f) {
-            var _stored = 0;
-            try {
-                Object.defineProperty(window, f, {
-                    get: function() { return _stored; },
-                    set: function(v) {
-                        if (typeof v === 'number') _stored = 0;
-                        else _stored = v;
-                    },
-                    configurable: true,
-                    enumerable: false
-                });
-            } catch(e) {}
+    // Create a proxy that captures new WebSocket instances
+    window.WebSocket = new Proxy(NativeWebSocket, {
+        construct: function(target, args) {
+            var ws = new target(...args);
+            wsInstances.push(ws);
+            return ws;
+        }
+    });
+    // The proxy's toString() still returns "[native code]" – integrity OK.
+
+    // After 4 seconds (before the ~6s kill timer), disable .close on all captured sockets
+    setTimeout(function() {
+        wsInstances.forEach(function(ws) {
+            try { ws.close = function() {}; } catch(e) {}
         });
-        console.log('[OMRXWARE] Kill bypass active (' + _flags.length + ' flags zeroed)');
-    }
+        console.log('[OMRXWARE] WebSocket.close neutralized on ' + wsInstances.length + ' connection(s)');
+    }, 4000);
 
-    setTimeout(installKillBypass, 5000);
-    console.log('[OMRXWARE] Kill bypass scheduled in 5s (flags:', _flags.length, ')');
+    console.log('[OMRXWARE] Kill bypass (WebSocket proxy) active');
 })();
 `;
 
-        jsCode = delayedKillBypass + '\n' + jsCode;
+        // Prepend the bypass – no other native API hooks
+        jsCode = killBypass + '\n' + jsCode;
 
         // Inject omrxware.js (unchanged)
         try {
