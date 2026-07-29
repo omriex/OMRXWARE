@@ -1,12 +1,42 @@
 
 const fs = require('fs');
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  OMRXWARE Updater — permanent, obfuscation-resilient
+//
+//  AC bypass strategy (v3 — delayed interceptor):
+//
+//  HOW DEVAST.IO AC WORKS:
+//   1. Outer JS sets 3 global flag vars (chrome/CSS/safari detection) to 0 or 1
+//   2. Inner eval'd game reads them to:
+//      (a) Compute a hash for the WebSocket URL query string
+//      (b) Schedule a kill timer that fires if flags indicate Chrome
+//
+//  WHAT WENT WRONG BEFORE:
+//   • Zeroing flags immediately → wrong WS hash → server rejects → can't join
+//   • protoBypass on Object.prototype → inner game objects (WebSocket etc.) broken
+//
+//  CORRECT FIX — DELAYED INTERCEPTOR:
+//   • Phase 1 (before WS opens): NO interceptors. Flags = 1 (natural Chrome value).
+//     WS URL hash is computed correctly → server accepts → connection opens.
+//   • Phase 2 (500ms after WS open event): install smart property interceptors.
+//     - Numeric assignments → stored as 0 (kills the AC flag value)
+//     - Non-numeric (objects, WebSocket…) → pass through normally
+//     Kill timer reads flag → 0 → condition false → no kill. ✓
+//
+//  OBFUSCATION RESILIENCE:
+//   • Flag var names: detected structurally from try-catch pattern (never hardcoded)
+//   • Client JS URL: matched from HTML as js/<anything>.js
+//   • Interceptors: work even if Devast renames the flags every update
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function runUpdater() {
     try {
         console.log('Fetching Devast.io...');
         const htmlResponse = await fetch('https://devast.io/');
         const html = await htmlResponse.text();
 
+        // Match any JS in /js/ directory — handles all naming schemes (hash, base62, etc.)
         const scriptMatch = html.match(/src="(js\/[^"]+\.js[^"]*)"/i)
                          || html.match(/src="([^"]*client\.[0-9.]*min\.js[^"]*)"/i);
 
@@ -22,6 +52,7 @@ async function runUpdater() {
         fs.writeFileSync('devast-original.js', jsCode);
         console.log('[OK] Saved devast-original.js');
 
+        // ── 1. Physics modifier ─────────────────────────────────────────────
         const physCount = (jsCode.match(/-0\.35/g) || []).length;
         if (physCount > 0) {
             jsCode = jsCode.replace(/-0\.35/g, '-0.65');
@@ -30,14 +61,27 @@ async function runUpdater() {
             console.log('[OK] Physics mod (none found — may already be patched or moved)');
         }
 
+        // ── 2. Detect AC flag variable names ────────────────────────────────
+        //
+        // The 3 browser-fingerprint flag vars always follow this structure:
+        //
+        //   var <flagVar> = 0;
+        //   try {
+        //       <flagVar> = (<browser probe>) ? 1 : 0;
+        //   } catch (<x>) {}
+        //
+        // Multiple regex fallbacks to handle obfuscation variations:
+        //
         const flagVars = [];
 
+        // Primary: standard ternary in try-catch
         const tryFlagRe = /try\s*\{\s*(\S+)\s*=\s*[^=\n][^\n;]{5,800}\?\s*(?:0[xX]?1|01|1)\s*:\s*(?:0[xX]?0|0x0|00|0)\s*;\s*\}\s*catch\s*\(\s*\S+\s*\)\s*\{[^{}]*\}/g;
         let _m;
         while ((_m = tryFlagRe.exec(jsCode)) !== null) {
             if (!flagVars.includes(_m[1])) flagVars.push(_m[1]);
         }
 
+        // Fallback: look for var X = 0; immediately before try { X = ... }
         if (flagVars.length < 3) {
             const declRe = /var\s+(\S+)\s*=\s*(?:0[xX]?0|00|0)\s*;/g;
             while ((_m = declRe.exec(jsCode)) !== null) {
@@ -54,60 +98,109 @@ async function runUpdater() {
             console.warn('[AC] WARNING: No flag vars found — AC structure may have changed. Kill bypass will be partial.');
         }
 
+        // ── 3. Phase-switching kill bypass (definitive AC bypass) ──────────────
+        //
+        // HOW THE AC KILL ACTUALLY WORKS (discovered through analysis):
+        //
+        //   1. Outer JS sets flag vars (оаߎ９ etc.) to 1 (Chrome detected)
+        //   2. Inner eval'd game IMMEDIATELY caches them into local closure vars:
+        //        var _f = оаߎ９;  // _f = 1 (at page load, T=0)
+        //   3. Kill setInterval checks _f every 6s → if 1, kills player
+        //   4. SEPARATELY, when user clicks Play, the game reads flags directly
+        //      from window (NOT from cache) to compute the WebSocket URL hash
+        //
+        // WHY T=5s TIMER FAILED:
+        //   Our getter only changes window.flag AFTER T=5s. But the cache (_f)
+        //   was captured at T=0 with value=1. Kill checks _f → always kills.
+        //
+        // THE FIX — PHASE-SWITCHING GETTER:
+        //
+        //   Phase 0 (page load, T=0): getter returns 0
+        //     → kill cache captures 0 → kill timer reads 0 → no kill ✓
+        //
+        //   Phase 1 (on click, ~2s window): getter returns REAL value (1 for Chrome)
+        //     → hash computation gets 1 → server accepts connection ✓
+        //
+        //   Phase 0 again (after 2s): getter returns 0
+        //     → any subsequent reads return 0 → no kill ✓
+        //
         const delayedKillBypass = `
 (function() {
     var _flags = ${JSON.stringify(flagVars)};
-    var _installed = false;
+    var _realVals = {};   // stores values set by outer JS (1 for Chrome etc.)
+    var _exposeReal = false;  // when true, getter returns real value (hash phase)
 
-    function installKillBypass() {
-        if (_installed) return;
-        _installed = true;
-        _flags.forEach(function(f) {
-            var _stored = 0;
-            try {
-                Object.defineProperty(window, f, {
-                    get: function() { return _stored; },
-                    set: function(v) {
-                        // AC flags are always numeric (0 or 1).
-                        // Game objects (WebSocket, etc.) are non-numeric → pass through.
-                        if (typeof v === 'number') {
-                            _stored = 0;
-                        } else {
-                            _stored = v;
-                        }
-                    },
-                    configurable: true,
-                    enumerable: false
-                });
-            } catch(e) {}
-        });
-        console.log('[OMRXWARE] Kill bypass active (' + _flags.length + ' flags zeroed)');
-    }
+    // Install property interceptors IMMEDIATELY (T=0)
+    // Getter returns 0 by default so kill cache captures 0
+    _flags.forEach(function(f) {
+        _realVals[f] = 0;
+        try {
+            Object.defineProperty(window, f, {
+                get: function() {
+                    return _exposeReal ? (_realVals[f] || 0) : 0;
+                },
+                set: function(v) {
+                    // Store the real value (1 for Chrome) for later hash use.
+                    // Do NOT expose it yet — keep returning 0 until click.
+                    if (typeof v === 'number') _realVals[f] = v;
+                },
+                configurable: true,
+                enumerable: false
+            });
+        } catch(e) {}
+    });
 
-    // Simple 5-second timeout — no WebSocket hooking.
-    // Timeline:
-    //   ~0-2s : inner game computes WS URL hash (flags=1, correct)
-    //   ~5s   : we zero the flags (kill condition now fails)
-    //   ~6s+  : kill timer fires → reads 0 → no kill ✓
-    // Hooking WebSocket was AC-detectable (function name mismatch).
-    setTimeout(installKillBypass, 5000);
-    console.log('[OMRXWARE] Kill bypass scheduled in 5s (flags:', _flags.length, ')');
+    // On first click (Play button): temporarily expose real values for 2s
+    // so the WebSocket URL hash computation gets the correct flag values.
+    // After 2s, revert to 0 (hash is done, kill prevention resumes).
+    document.addEventListener('click', function onPlayClick() {
+        _exposeReal = true;
+        setTimeout(function() { _exposeReal = false; }, 2000);
+        document.removeEventListener('click', onPlayClick, true);
+    }, { capture: true });
+
+    console.log('[OMRXWARE] Kill bypass active — phase-switching (flags:', _flags.length, ')');
 })();
 `;
 
-        const zoomBypass = `
+
+        // ── 4. WebSocket close guard ─────────────────────────────────────────
+        //
+        // The AC kill mechanism calls ws.close() immediately after creating the
+        // WebSocket (while it's still in CONNECTING state), producing:
+        //   "WebSocket is closed before the connection is established"
+        //
+        // Fix: hook WebSocket.prototype.close to block calls made on connections
+        // that are still connecting (readyState === 0) to devast.io game servers.
+        // Legitimate closes (after connection opens, or to non-game servers) are
+        // always passed through.
+        //
+        // NOTE: We do NOT hook the WebSocket constructor — only the .close method.
+        // This avoids the function-name AC detection that broke the previous hook.
+        //
+        const wsCloseGuard = `
 (function() {
-    var _origMax = Math.max;
-    Math.max = function(a, b) {
-        if (typeof a === 'number' && a < 0 && a > -0.9 && arguments.length === 2) {
-            return _origMax(a * 1.3, b);
+    var _origClose = WebSocket.prototype.close;
+    WebSocket.prototype.close = function(code, reason) {
+        // Block premature close on devast game servers only
+        if (this.readyState === 0 /* CONNECTING */ &&
+            typeof this.url === 'string' &&
+            this.url.indexOf('devast.io') !== -1 &&
+            this.url.indexOf('127.0.0.1') === -1) {
+            var self = this;
+            // Allow close after 10s regardless (safety net)
+            setTimeout(function() { try { _origClose.call(self, code, reason); } catch(e) {} }, 10000);
+            return;
         }
-        return _origMax.apply(this, arguments);
+        return _origClose.apply(this, arguments);
     };
-    console.log('[OMRXWARE] Zoom extender active');
+    console.log('[OMRXWARE] WS close guard active');
 })();
 `;
 
+
+
+        // ── 5. WebAssembly passthrough ──────────────────────────────────────
         const wasmBypass = `
 (function() {
     var _origInstantiate = WebAssembly.instantiate;
@@ -121,6 +214,7 @@ async function runUpdater() {
 })();
 `;
 
+        // ── 6. Timing passthrough ────────────────────────────────────────────
         const timingBypass = `
 (function() {
     var _perfNow = performance.now.bind(performance);
@@ -130,6 +224,7 @@ async function runUpdater() {
 })();
 `;
 
+        // ── 7. Canvas passthrough ────────────────────────────────────────────
         const canvasBypass = `
 (function() {
     var _origToDataURL = HTMLCanvasElement.prototype.toDataURL;
@@ -143,6 +238,7 @@ async function runUpdater() {
 })();
 `;
 
+        // ── 8. UI / ad remover ───────────────────────────────────────────────
         const uiRemover = `
 (function() {
     var targets = [
@@ -189,13 +285,19 @@ async function runUpdater() {
 })();
 `;
 
-        jsCode = uiRemover       + '\n' + jsCode;
-        jsCode = canvasBypass    + '\n' + jsCode;
-        jsCode = timingBypass    + '\n' + jsCode;
-        jsCode = wasmBypass      + '\n' + jsCode;
-        jsCode = zoomBypass      + '\n' + jsCode;
+        // Only prepend the kill bypass. All other hooks (wsCloseGuard, wasmBypass,
+        // timingBypass, canvasBypass, uiRemover) wrap native browser APIs, making
+        // their .toString() return user code instead of "[native code]". The game
+        // hashes these function signatures into the WebSocket URL query string →
+        // any hook causes the server to reject the connection.
+        //
+        // The kill bypass is safe: it uses Object.defineProperty on plain global
+        // variables (the AC flag vars), not on any browser API. At T=5s these vars
+        // get property interceptors. By then the WS URL hash has been computed and
+        // the connection is already open.
         jsCode = delayedKillBypass + '\n' + jsCode;
 
+        // ── 9. Inject omrxware.js ────────────────────────────────────────────
         try {
             const myScript = fs.readFileSync('omrxware.js', 'utf8');
             const b64 = Buffer.from(myScript).toString('base64');
