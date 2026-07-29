@@ -1,120 +1,110 @@
+
 const fs = require('fs');
 
 async function runUpdater() {
     try {
         console.log('Fetching Devast.io...');
-
-        const headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0'
-        };
-
-        const htmlResponse = await fetch('https://devast.io/', { headers });
+        const htmlResponse = await fetch('https://devast.io/');
         const html = await htmlResponse.text();
 
-        fs.writeFileSync('debug-html.html', html);
-        console.log('[DEBUG] Saved raw HTML to debug-html.html (first 500 chars):');
-        console.log(html.substring(0, 500) + '...\n');
+        const scriptMatch = html.match(/src="(js\/[^"]+\.js[^"]*)"/i)
+                         || html.match(/src="([^"]*client\.[0-9.]*min\.js[^"]*)"/i);
 
-        const scriptSrcRegex = /<script[^>]*src=["']([^"']+\.js)["'][^>]*>/gi;
-        let match;
-        const scriptUrls = [];
-        while ((match = scriptSrcRegex.exec(html)) !== null) {
-            scriptUrls.push(match[1]);
-        }
+        if (!scriptMatch) throw new Error('Could not find client JS in HTML.');
 
-        if (scriptUrls.length === 0) {
-            throw new Error('No script tags with .js src found in HTML.');
-        }
-
-        console.log(`[DEBUG] Found ${scriptUrls.length} script URLs:`, scriptUrls);
-
-        let selected = scriptUrls.find(url => url.includes('js/') && !url.includes('jquery') && !url.includes('bootstrap'));
-        if (!selected) {
-            selected = scriptUrls.find(url => url.includes('client') || url.includes('main') || url.includes('bundle'));
-        }
-        if (!selected) {
-            selected = scriptUrls.reduce((a, b) => a.length > b.length ? a : b);
-        }
-
-        console.log('[DEBUG] Selected script URL:', selected);
-
-        let jsUrl = selected;
-        if (!jsUrl.startsWith('http')) {
-            jsUrl = 'https://devast.io/' + jsUrl.replace(/^\//, '');
-        }
+        let jsUrl = scriptMatch[1];
+        if (!jsUrl.startsWith('http')) jsUrl = 'https://devast.io/' + jsUrl.replace(/^\//, '');
 
         console.log('Downloading', jsUrl);
-
-        const jsResponse = await fetch(jsUrl, { headers });
+        const jsResponse = await fetch(jsUrl);
         let jsCode = await jsResponse.text();
 
         fs.writeFileSync('devast-original.js', jsCode);
         console.log('[OK] Saved devast-original.js');
 
         const physCount = (jsCode.match(/-0\.35/g) || []).length;
-        jsCode = jsCode.replace(/-0\.35/g, '-0.65');
-        console.log('[OK] Physics mod (' + physCount + ' replacements)');
-
-        jsCode = jsCode.replace(
-            /(\[\s*\d+\s*,\s*0[0-7]+\s*\]|\[\s*\d+\s*,\s*\d+\s*\])(?=\s*;[^}]{0,300}catch)/,
-            '(function(){var _v=[30,1133];_v.toString=function(){return"OMRXWARE";};return _v;})()'
-        );
+        if (physCount > 0) {
+            jsCode = jsCode.replace(/-0\.35/g, '-0.65');
+            console.log('[OK] Physics mod (' + physCount + ' replacements)');
+        } else {
+            console.log('[OK] Physics mod (none found — may already be patched or moved)');
+        }
 
         const flagVars = [];
+
         const tryFlagRe = /try\s*\{\s*(\S+)\s*=\s*[^=\n][^\n;]{5,800}\?\s*(?:0[xX]?1|01|1)\s*:\s*(?:0[xX]?0|0x0|00|0)\s*;\s*\}\s*catch\s*\(\s*\S+\s*\)\s*\{[^{}]*\}/g;
         let _m;
         while ((_m = tryFlagRe.exec(jsCode)) !== null) {
             if (!flagVars.includes(_m[1])) flagVars.push(_m[1]);
         }
-        console.log('[AC] Detected ' + flagVars.length + ' flag var(s)');
-        if (flagVars.length === 0) {
-            console.warn('[AC] WARNING: No flag vars detected — AC pattern may have changed');
+
+        if (flagVars.length < 3) {
+            const declRe = /var\s+(\S+)\s*=\s*(?:0[xX]?0|00|0)\s*;/g;
+            while ((_m = declRe.exec(jsCode)) !== null) {
+                if (flagVars.includes(_m[1])) continue;
+                const next400 = jsCode.substring(_m.index, _m.index + 500);
+                if (/try\s*\{/.test(next400) && /chrome|CSS|safari/i.test(next400)) {
+                    flagVars.push(_m[1]);
+                }
+            }
         }
 
-        const flagInterceptor = `
+        console.log('[AC] Detected ' + flagVars.length + ' flag var(s):', flagVars.map(f => JSON.stringify(f)).join(', ') || 'none');
+        if (flagVars.length === 0) {
+            console.warn('[AC] WARNING: No flag vars found — AC structure may have changed. Kill bypass will be partial.');
+        }
+
+        const delayedKillBypass = `
 (function() {
     var _flags = ${JSON.stringify(flagVars)};
-    _flags.forEach(function(f) {
-        try {
-            Object.defineProperty(window, f, {
-                get: function() { return 0; },
-                set: function(v) { },
-                configurable: false,
-                enumerable: false
-            });
-        } catch(e) {}
-    });
-    console.log('[OMRXWARE] AC flag interceptors installed:', _flags.length);
+    var _installed = false;
+
+    function installKillBypass() {
+        if (_installed) return;
+        _installed = true;
+        _flags.forEach(function(f) {
+            var _stored = 0;
+            try {
+                Object.defineProperty(window, f, {
+                    get: function() { return _stored; },
+                    set: function(v) {
+                        // AC flags are always numeric (0 or 1).
+                        // Game objects (WebSocket, etc.) are non-numeric → pass through.
+                        if (typeof v === 'number') {
+                            _stored = 0;
+                        } else {
+                            _stored = v;
+                        }
+                    },
+                    configurable: true,
+                    enumerable: false
+                });
+            } catch(e) {}
+        });
+        console.log('[OMRXWARE] Kill bypass active (' + _flags.length + ' flags zeroed)');
+    }
+
+    // Simple 5-second timeout — no WebSocket hooking.
+    // Timeline:
+    //   ~0-2s : inner game computes WS URL hash (flags=1, correct)
+    //   ~5s   : we zero the flags (kill condition now fails)
+    //   ~6s+  : kill timer fires → reads 0 → no kill ✓
+    // Hooking WebSocket was AC-detectable (function name mismatch).
+    setTimeout(installKillBypass, 5000);
+    console.log('[OMRXWARE] Kill bypass scheduled in 5s (flags:', _flags.length, ')');
 })();
 `;
 
-        const protoBypass = `
+        const zoomBypass = `
 (function() {
-    var _oldProps = [
-        '\u0455\u1687\u10c3',
-        '\u2c9f\u030b\ufe04',
-        '\u0440\u0789\u034f',
-    ];
-    _oldProps.forEach(function(prop) {
-        try {
-            Object.defineProperty(Object.prototype, prop, {
-                get: function() { return 0; },
-                set: function(val) {},
-                configurable: true,
-                enumerable: false
-            });
-        } catch(e) {}
-    });
+    var _origMax = Math.max;
+    Math.max = function(a, b) {
+        if (typeof a === 'number' && a < 0 && a > -0.9 && arguments.length === 2) {
+            return _origMax(a * 1.3, b);
+        }
+        return _origMax.apply(this, arguments);
+    };
+    console.log('[OMRXWARE] Zoom extender active');
 })();
 `;
 
@@ -173,9 +163,9 @@ async function runUpdater() {
     style.innerHTML = '#' + targets.join(', #') + ' { display:none!important; opacity:0!important; visibility:hidden!important; pointer-events:none!important; z-index:-9999!important; width:0!important; height:0!important; }';
     style.innerHTML += ' .bebebaba { display:none!important; }';
     if (document.head) document.head.appendChild(style);
-    else document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
+    else document.addEventListener('DOMContentLoaded', function() { document.head.appendChild(style); });
 
-    const origDraw = CanvasRenderingContext2D.prototype.drawImage;
+    var origDraw = CanvasRenderingContext2D.prototype.drawImage;
     CanvasRenderingContext2D.prototype.drawImage = function() {
         try {
             var nick = document.getElementById('nicknameInput');
@@ -199,12 +189,12 @@ async function runUpdater() {
 })();
 `;
 
-        jsCode = uiRemover    + '\n' + jsCode;
-        jsCode = canvasBypass + '\n' + jsCode;
-        jsCode = timingBypass + '\n' + jsCode;
-        jsCode = wasmBypass   + '\n' + jsCode;
-        jsCode = protoBypass  + '\n' + jsCode;
-        jsCode = flagInterceptor + '\n' + jsCode;
+        jsCode = uiRemover       + '\n' + jsCode;
+        jsCode = canvasBypass    + '\n' + jsCode;
+        jsCode = timingBypass    + '\n' + jsCode;
+        jsCode = wasmBypass      + '\n' + jsCode;
+        jsCode = zoomBypass      + '\n' + jsCode;
+        jsCode = delayedKillBypass + '\n' + jsCode;
 
         try {
             const myScript = fs.readFileSync('omrxware.js', 'utf8');
@@ -221,8 +211,7 @@ setTimeout(function() {
 `;
             console.log('[INJ] omrxware.js injected');
         } catch(e) {
-            console.error('Could not find omrxware.js. Exiting.');
-            process.exit(1);
+            console.error('Could not find omrxware.js.'); process.exit(1);
         }
 
         fs.writeFileSync('devast-modded.js', jsCode);
@@ -230,8 +219,7 @@ setTimeout(function() {
         console.log('Resource Override pattern: *://devast.io/js/*.js*');
 
     } catch(err) {
-        console.error(err);
-        process.exit(1);
+        console.error(err); process.exit(1);
     }
 }
 
