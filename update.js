@@ -1,22 +1,41 @@
-
 const fs = require('fs');
 
 async function runUpdater() {
     try {
         console.log('Fetching Devast.io...');
-        const htmlResponse = await fetch('https://devast.io/');
+
+        const htmlResponse = await fetch('https://devast.io/', {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+        });
         const html = await htmlResponse.text();
 
-        const scriptMatch = html.match(/src="(js\/[^"]+\.js[^"]*)"/i)
-                         || html.match(/src="([^"]*client\.[0-9.]*min\.js[^"]*)"/i);
+        let scriptMatch = html.match(/<script[^>]*src=["'](js\/[^"']+\.js)["'][^>]*>/i)
+                       || html.match(/src=["']([^"']*client\.[0-9.]*min\.js[^"']*)["']/i)
+                       || html.match(/src=["'](js\/[^"']+\.js)["']/i);
 
-        if (!scriptMatch) throw new Error('Could not find client JS in HTML.');
+        if (!scriptMatch) {
+            const anyJs = html.match(/src=["']([^"']+\.js)["']/i);
+            if (anyJs && !anyJs[1].includes('jquery') && !anyJs[1].includes('bootstrap')) {
+                scriptMatch = anyJs;
+            } else {
+                throw new Error('Could not find client JS in HTML.');
+            }
+        }
 
         let jsUrl = scriptMatch[1];
-        if (!jsUrl.startsWith('http')) jsUrl = 'https://devast.io/' + jsUrl.replace(/^\//, '');
+        if (!jsUrl.startsWith('http')) {
+            jsUrl = 'https://devast.io/' + jsUrl.replace(/^\//, '');
+        }
 
         console.log('Downloading', jsUrl);
-        const jsResponse = await fetch(jsUrl);
+
+        const jsResponse = await fetch(jsUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+        });
         let jsCode = await jsResponse.text();
 
         fs.writeFileSync('devast-original.js', jsCode);
@@ -160,6 +179,7 @@ async function runUpdater() {
 })();
 `;
 
+        // Insert all bypasses at the top of the script
         jsCode = uiRemover    + '\n' + jsCode;
         jsCode = canvasBypass + '\n' + jsCode;
         jsCode = timingBypass + '\n' + jsCode;
@@ -167,6 +187,7 @@ async function runUpdater() {
         jsCode = protoBypass  + '\n' + jsCode;
         jsCode = flagInterceptor + '\n' + jsCode;
 
+        // Inject omrxware.js if present (unchanged)
         try {
             const myScript = fs.readFileSync('omrxware.js', 'utf8');
             const b64 = Buffer.from(myScript).toString('base64');
@@ -182,7 +203,8 @@ setTimeout(function() {
 `;
             console.log('[INJ] omrxware.js injected');
         } catch(e) {
-            console.error('Could not find omrxware.js.'); process.exit(1);
+            console.error('Could not find omrxware.js. Exiting.');
+            process.exit(1);
         }
 
         fs.writeFileSync('devast-modded.js', jsCode);
@@ -190,7 +212,8 @@ setTimeout(function() {
         console.log('Resource Override pattern: *://devast.io/js/*.js*');
 
     } catch(err) {
-        console.error(err); process.exit(1);
+        console.error(err);
+        process.exit(1);
     }
 }
 
