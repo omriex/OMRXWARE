@@ -4,38 +4,58 @@ async function runUpdater() {
     try {
         console.log('Fetching Devast.io...');
 
-        const htmlResponse = await fetch('https://devast.io/', {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
-        });
+        const headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0'
+        };
+
+        const htmlResponse = await fetch('https://devast.io/', { headers });
         const html = await htmlResponse.text();
 
-        let scriptMatch = html.match(/<script[^>]*src=["'](js\/[^"']+\.js)["'][^>]*>/i)
-                       || html.match(/src=["']([^"']*client\.[0-9.]*min\.js[^"']*)["']/i)
-                       || html.match(/src=["'](js\/[^"']+\.js)["']/i);
+        fs.writeFileSync('debug-html.html', html);
+        console.log('[DEBUG] Saved raw HTML to debug-html.html (first 500 chars):');
+        console.log(html.substring(0, 500) + '...\n');
 
-        if (!scriptMatch) {
-            const anyJs = html.match(/src=["']([^"']+\.js)["']/i);
-            if (anyJs && !anyJs[1].includes('jquery') && !anyJs[1].includes('bootstrap')) {
-                scriptMatch = anyJs;
-            } else {
-                throw new Error('Could not find client JS in HTML.');
-            }
+        const scriptSrcRegex = /<script[^>]*src=["']([^"']+\.js)["'][^>]*>/gi;
+        let match;
+        const scriptUrls = [];
+        while ((match = scriptSrcRegex.exec(html)) !== null) {
+            scriptUrls.push(match[1]);
         }
 
-        let jsUrl = scriptMatch[1];
+        if (scriptUrls.length === 0) {
+            throw new Error('No script tags with .js src found in HTML.');
+        }
+
+        console.log(`[DEBUG] Found ${scriptUrls.length} script URLs:`, scriptUrls);
+
+        let selected = scriptUrls.find(url => url.includes('js/') && !url.includes('jquery') && !url.includes('bootstrap'));
+        if (!selected) {
+            selected = scriptUrls.find(url => url.includes('client') || url.includes('main') || url.includes('bundle'));
+        }
+        if (!selected) {
+            selected = scriptUrls.reduce((a, b) => a.length > b.length ? a : b);
+        }
+
+        console.log('[DEBUG] Selected script URL:', selected);
+
+        let jsUrl = selected;
         if (!jsUrl.startsWith('http')) {
             jsUrl = 'https://devast.io/' + jsUrl.replace(/^\//, '');
         }
 
         console.log('Downloading', jsUrl);
 
-        const jsResponse = await fetch(jsUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
-        });
+        const jsResponse = await fetch(jsUrl, { headers });
         let jsCode = await jsResponse.text();
 
         fs.writeFileSync('devast-original.js', jsCode);
@@ -68,7 +88,7 @@ async function runUpdater() {
         try {
             Object.defineProperty(window, f, {
                 get: function() { return 0; },
-                set: function(v) { /* silently ignore assignments */ },
+                set: function(v) { },
                 configurable: false,
                 enumerable: false
             });
@@ -179,7 +199,6 @@ async function runUpdater() {
 })();
 `;
 
-        // Insert all bypasses at the top of the script
         jsCode = uiRemover    + '\n' + jsCode;
         jsCode = canvasBypass + '\n' + jsCode;
         jsCode = timingBypass + '\n' + jsCode;
@@ -187,7 +206,6 @@ async function runUpdater() {
         jsCode = protoBypass  + '\n' + jsCode;
         jsCode = flagInterceptor + '\n' + jsCode;
 
-        // Inject omrxware.js if present (unchanged)
         try {
             const myScript = fs.readFileSync('omrxware.js', 'utf8');
             const b64 = Buffer.from(myScript).toString('base64');
